@@ -52,6 +52,7 @@
 2. **Trade → Demo trading** (перемикач демо-режиму).
 3. В демо-режимі: аватар → **Demo Trading API** → **Create Demo Trading API key**:
    права **Read** + **Trade** (без Withdraw), придумайте **passphrase**.
+   Також у демо-режимі: **Settings → Account mode → Spot and futures** (у режимі Simple ф'ючерси недоступні).
 4. ❗ Ключ має бути створений саме в демо-режимі: живий OKX такі ключі відхиляє.
 5. Запишіть у `.env`:
    `EXCHANGE_ID=okx`, `EXCHANGE_API_KEY=...`, `EXCHANGE_API_SECRET=...`, `EXCHANGE_API_PASSPHRASE=...`

@@ -47,3 +47,4 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — OKX demo shares the production host, so the guard allowlists host + mandatory `x-simulated-trading: 1` header, checked on every request; demo keys are also rejected by live OKX.
 - 2026-11-01 — Orders are sized in base units and converted to contracts via `contractSize` (OKX BTC swap = 0.01 BTC); one-way (net) position mode, cross margin.
 - 2026-11-01 — History before November 2026 comes from the Bybit cache; GitHub jobs append newer candles from OKX's public API.
+- 2026-11-01 — Live step isolates failures per agent and symbol; a demo-venue error is logged but never stops shadow agents.

@@ -150,3 +150,20 @@ def test_flip_closes_then_opens() -> None:
 def test_seconds_until_next_bar() -> None:
     assert seconds_until_next_bar(900 * 10 + 100, 900, 15) == pytest.approx(815)
     assert np.isfinite(seconds_until_next_bar(0, 900))
+
+
+def test_demo_failure_does_not_stop_other_agents() -> None:
+    public, venue = FakePublic(), FakeVenue()
+
+    def broken(*args: object, **kwargs: object) -> Fill:
+        raise RuntimeError("This API Key does not have trading permission")
+
+    venue.market_order = broken  # type: ignore[method-assign]
+    settings = Settings()
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    store = MemoryStore()
+    agents = [Agent("ma_cross", "baseline", Const(1.0)), Agent("other", "baseline", Const(-1.0))]
+    report = Trader(settings, store, public, venue, agents=agents).step()
+    assert len(report.errors) == 1 and "ma_cross" in report.errors[0]
+    assert store.select("agent_state", {"agent_id": "other", "venue": "shadow"})
+    assert store.select("bot_status")[0]["last_error"]

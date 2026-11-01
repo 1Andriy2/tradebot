@@ -83,22 +83,29 @@ class Trader:
         for symbol in self.symbols:
             try:
                 df = self._recent_candles(symbol)
-                report.bar_time[symbol] = df.index[-1].isoformat()
-                self.last_price[symbol] = float(df["close"].iloc[-1])
-                atr = ind.atr(df, self.settings.risk.atr_period)
-                for agent in self.agents:
+            except Exception as exc:
+                self._error(report, f"{symbol}: {exc!r}")
+                continue
+            report.bar_time[symbol] = df.index[-1].isoformat()
+            self.last_price[symbol] = float(df["close"].iloc[-1])
+            atr = ind.atr(df, self.settings.risk.atr_period)
+            # Each agent is isolated: one failing agent (or a demo-venue error) never stops the rest.
+            for agent in self.agents:
+                try:
                     signal = agent.strategy.signal(df)
                     report.decisions += self._advance_shadow(agent, symbol, df, signal, atr)
                     if self.venue is not None and agent.id == champion:
                         report.orders += self._trade_demo(agent, symbol, df, signal, atr)
-            except Exception as exc:  # keep other symbols running; surface the error
-                msg = f"{symbol}: {exc!r}"
-                log.exception("step failed for %s", symbol)
-                report.errors.append(msg)
-                self._event("error", msg, {"traceback": traceback.format_exc()[-4000:]})
+                except Exception as exc:
+                    self._error(report, f"{agent.id}/{symbol}: {exc!r}", agent.id)
         self._snapshot_equity()
         self._status(report)
         return report
+
+    def _error(self, report: StepReport, msg: str, agent_id: str | None = None) -> None:
+        log.exception("step failed: %s", msg)
+        report.errors.append(msg)
+        self._event("error", msg, {"traceback": traceback.format_exc()[-4000:]}, agent_id)
 
     # ---------- data ----------
 
