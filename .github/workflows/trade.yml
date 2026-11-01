@@ -32,9 +32,10 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          EXCHANGE_ID: bybit
+          EXCHANGE_ID: ${{ vars.EXCHANGE_ID || 'okx' }}  # Bybit blocks GitHub runners (HTTP 403)
           EXCHANGE_API_KEY: ${{ secrets.EXCHANGE_API_KEY }}
           EXCHANGE_API_SECRET: ${{ secrets.EXCHANGE_API_SECRET }}
+          EXCHANGE_API_PASSPHRASE: ${{ secrets.EXCHANGE_API_PASSPHRASE }}
           SHADOW_ONLY: ${{ inputs.shadow_only }}
         run: |
           if [ "$SHADOW_ONLY" = "true" ]; then

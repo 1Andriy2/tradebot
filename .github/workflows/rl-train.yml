@@ -27,5 +27,6 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EXCHANGE_ID: ${{ vars.EXCHANGE_ID || 'okx' }}  # market data source for cache updates
           TIMESTEPS: ${{ inputs.timesteps || '300000' }}
         run: uv run tradebot rl-train --sync --no-download --device cpu --timesteps "$TIMESTEPS"

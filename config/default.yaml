@@ -1,7 +1,7 @@
 # Default configuration. Override with config/local.yaml (gitignored) or TRADEBOT_* env vars.
 
 venue:
-  exchange_id: bybit   # only venues registered in tradebot.exchange.guard are accepted
+  exchange_id: bybit   # bybit | okx (demo only, see tradebot.exchange.guard); env EXCHANGE_ID overrides
 
 markets:
   symbols: ["BTC/USDT:USDT", "ETH/USDT:USDT"]

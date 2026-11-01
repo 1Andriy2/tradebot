@@ -42,3 +42,8 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — CPU-only PyTorch on Linux via a uv index, so the 15-minute job stays light.
 - 2026-11-01 — Server mode: one Docker image (python:3.11-slim, arm64/amd64), compose services `trader` (daemon) and `trainer` (nightly loop).
 - 2026-11-01 — Known risk: Bybit's CDN may block US cloud IPs (GitHub runners); verify with `venue-check.yml`. No proxy/geo-block circumvention will be used.
+- 2026-11-01 — Verified from a GitHub runner: Bybit (demo and public API) returns HTTP 403; Kraken Futures demo is discontinued (redirects to marketing page); OKX and Bitget respond 200.
+- 2026-11-01 — Venue for GitHub cron mode: OKX Demo Trading (`EXCHANGE_ID=okx`). Bybit Demo stays supported for local/server mode.
+- 2026-11-01 — OKX demo shares the production host, so the guard allowlists host + mandatory `x-simulated-trading: 1` header, checked on every request; demo keys are also rejected by live OKX.
+- 2026-11-01 — Orders are sized in base units and converted to contracts via `contractSize` (OKX BTC swap = 0.01 BTC); one-way (net) position mode, cross margin.
+- 2026-11-01 — History before November 2026 comes from the Bybit cache; GitHub jobs append newer candles from OKX's public API.

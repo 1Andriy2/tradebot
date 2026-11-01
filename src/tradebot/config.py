@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +69,13 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 def load_settings(*paths: Path) -> Settings:
-    """Load default.yaml, then local.yaml (if present), then any extra paths."""
+    """Load default.yaml, then local.yaml (if present), then any extra paths.
+
+    ``EXCHANGE_ID`` in the environment overrides ``venue.exchange_id``."""
     data: dict[str, Any] = {}
     for path in (DEFAULT_CONFIG, LOCAL_CONFIG, *paths):
         if path.exists():
             data = _deep_merge(data, yaml.safe_load(path.read_text()) or {})
+    if os.environ.get("EXCHANGE_ID"):
+        data = _deep_merge(data, {"venue": {"exchange_id": os.environ["EXCHANGE_ID"]}})
     return Settings.model_validate(data)

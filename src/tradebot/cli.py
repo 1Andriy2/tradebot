@@ -78,9 +78,9 @@ def cmd_backtest(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _make_trader(settings: Settings, args: argparse.Namespace) -> Trader:
-    from tradebot.exchange.venue import BybitDemoVenue
+    from tradebot.exchange.venue import CcxtDemoVenue
 
-    venue = None if args.shadow_only else BybitDemoVenue.from_env()
+    venue = None if args.shadow_only else CcxtDemoVenue.from_env()
     return Trader(settings, _store(args), make_public_client(settings.venue.exchange_id), venue)
 
 

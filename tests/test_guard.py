@@ -47,3 +47,30 @@ def test_install_guard_accepts_demo_and_blocks_redirected_requests() -> None:
 def test_public_client_has_no_keys() -> None:
     client = make_public_client("bybit")
     assert not client.apiKey and not client.secret
+
+
+def test_okx_demo_requires_simulated_header() -> None:
+    client = ccxt.okx({"apiKey": "x", "secret": "y", "password": "z"})
+    with pytest.raises(LiveEndpointError):
+        install_guard(client, "okx")  # not in demo mode: no x-simulated-trading header
+    client.set_sandbox_mode(True)
+    install_guard(client, "okx")
+
+
+def test_okx_guard_blocks_request_if_demo_header_disappears() -> None:
+    client = ccxt.okx({"apiKey": "x", "secret": "y", "password": "z"})
+    client.set_sandbox_mode(True)
+    install_guard(client, "okx")
+    client.set_sandbox_mode(False)  # header removed after construction
+    with pytest.raises(LiveEndpointError):
+        client.fetch("https://www.okx.com/api/v5/account/balance", "GET")
+
+
+def test_okx_guard_blocks_header_override_and_foreign_host() -> None:
+    client = ccxt.okx({"apiKey": "x", "secret": "y", "password": "z"})
+    client.set_sandbox_mode(True)
+    install_guard(client, "okx")
+    with pytest.raises(LiveEndpointError):
+        client.fetch("https://www.okx.com/api/v5/trade/order", "POST", {"x-simulated-trading": "0"})
+    with pytest.raises(LiveEndpointError):
+        client.fetch("https://aws.okx.com/api/v5/trade/order", "POST")
