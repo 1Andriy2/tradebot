@@ -1,9 +1,9 @@
 # Nightly retraining (LightGBM walk-forward + champion/challenger) and DB housekeeping.
 name: Nightly retrain
 
+# Triggered by Supabase Cron (supabase/migrations/20261101180000_cron_dispatch.sql)
+# via workflow_dispatch; GitHub's own schedule never fired for this repository.
 on:
-  schedule:
-    - cron: "17 2 * * *"
   workflow_dispatch:
 
 permissions:

@@ -1,9 +1,9 @@
 # Cron mode: one trading step per closed 15m candle. The bot starts, trades, exits.
 name: Trade step
 
+# Triggered by Supabase Cron (supabase/migrations/20261101180000_cron_dispatch.sql)
+# via workflow_dispatch; GitHub's own schedule never fired for this repository.
 on:
-  schedule:
-    - cron: "2,17,32,47 * * * *"  # two minutes after each 15m candle closes
   workflow_dispatch:
     inputs:
       shadow_only:

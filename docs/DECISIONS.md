@@ -58,3 +58,5 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — Repeatability metrics: share of profitable test folds, per-fold returns, and Deflated Sharpe Ratio over all configurations tried in a run.
 - 2026-11-01 — Pattern scan: hour-of-day and day-of-week return effects with Benjamini-Hochberg q-values; "stable" = same sign and p < 0.05 in both halves of history.
 - 2026-11-01 — Tests: hypothesis property tests (equity = initial + trade PnL; exposure bounded by caps) and a golden regression file for every strategy family.
+- 2026-11-01 — GitHub `schedule` never fired in this repo (hours after enabling and re-registering). Workflows are now triggered by Supabase Cron (pg_cron + pg_net) calling workflow_dispatch; GitHub schedules and the keepalive workflow were removed.
+- 2026-11-01 — User-approved exception to "secrets only in .env / GitHub Secrets": a fine-grained GitHub token limited to Actions (read/write) on this repository lives in Supabase Vault (`github_dispatch_token`), added by the owner via the Dashboard; `dispatch_workflow()` is not executable by anon/authenticated.

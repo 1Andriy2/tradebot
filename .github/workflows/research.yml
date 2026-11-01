@@ -1,9 +1,9 @@
 # Nightly walk-forward scan of all strategy families + recurring-pattern statistics.
 name: Nightly research
 
+# Triggered by Supabase Cron (supabase/migrations/20261101180000_cron_dispatch.sql)
+# via workflow_dispatch; GitHub's own schedule never fired for this repository.
 on:
-  schedule:
-    - cron: "7 4 * * *"
   workflow_dispatch:
 
 permissions:

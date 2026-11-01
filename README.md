@@ -84,6 +84,12 @@
    `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `EXCHANGE_API_KEY`, `EXCHANGE_API_SECRET`, `EXCHANGE_API_PASSPHRASE`.
    Вручну це робиться в **Settings → Secrets and variables → Actions**.
 5. Вкладка **Actions** → **Venue reachability check** → **Run workflow**. Ця перевірка показує, які біржі доступні з GitHub.
+6. **Запуск за розкладом через Supabase Cron.** Розклад GitHub у цьому репозиторії не спрацьовував, тому
+   workflow запускає Supabase кожні 15 хв (торгівля) і щоночі (навчання, дослідження).
+   - Створіть ще один fine-grained токен: доступ **лише** до цього репозиторію, Repository permissions →
+     **Actions: Read and write** (більше нічого).
+   - Supabase Dashboard → **Integrations → Vault** (або пошук «Vault») → **Add new secret**:
+     name `github_dispatch_token`, value — цей токен. У `.env` його класти не потрібно.
 
 ### Крок 4. Vercel: дашборд
 
