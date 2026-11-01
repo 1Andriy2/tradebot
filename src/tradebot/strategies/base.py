@@ -28,6 +28,9 @@ class Strategy(ABC):
         args = ",".join(f"{k}={v}" for k, v in sorted(self.params.items()))
         return f"{self.name}({args})"
 
+    def fit(self, df: pd.DataFrame) -> None:  # noqa: B027 - optional hook
+        """Learn from training data (walk-forward). Most strategies have nothing to fit."""
+
     @abstractmethod
     def generate(self, df: pd.DataFrame) -> pd.Series:
         """Raw target exposure per bar (may contain NaN during warm-up)."""

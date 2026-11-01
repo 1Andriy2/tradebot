@@ -1,0 +1,31 @@
+# Nightly walk-forward scan of all strategy families + recurring-pattern statistics.
+name: Nightly research
+
+on:
+  schedule:
+    - cron: "7 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research
+  cancel-in-progress: false
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      EXCHANGE_ID: ${{ vars.EXCHANGE_ID || 'okx' }}  # market data source for cache updates
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --extra ml --extra db --frozen
+      - name: Research scan
+        run: uv run tradebot research --sync --workers 4

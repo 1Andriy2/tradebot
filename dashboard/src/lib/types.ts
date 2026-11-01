@@ -115,3 +115,30 @@ export interface ChampionRow {
   version_id: string | null;
   since: string;
 }
+
+export interface ResearchRow {
+  id: number;
+  run_id: string;
+  created_at: string;
+  family: string;
+  symbol: string;
+  timeframe: string;
+  metrics: Record<string, number>;
+  params: { latest?: Record<string, unknown>; folds?: { test_start: string; params: Record<string, unknown> }[] };
+  fold_returns: number[];
+}
+
+export interface PatternRow {
+  id: number;
+  run_id: string;
+  created_at: string;
+  symbol: string;
+  kind: "hour" | "dow";
+  bucket: number;
+  mean_return: number;
+  t_stat: number;
+  p_value: number;
+  q_value: number;
+  n: number;
+  stable: boolean;
+}

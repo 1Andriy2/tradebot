@@ -22,6 +22,7 @@ class Bar:
     close: float
     signal: float      # strategy output at this bar's close
     prev_atr: float    # ATR at the previous bar's close (known before this bar)
+    funding: float = 0.0  # funding rate charged on positions held into this bar
 
 
 def step_bar(
@@ -32,6 +33,7 @@ def step_bar(
 
     Returns the decision taken at this bar's close (it fills at the next bar's open).
     """
+    book.apply_funding(bar.funding, bar.open)
     pending = state.extra.pop("pending", None)
     if pending is not None:
         book.fill(bar.ts, pending["target"], bar.open, pending["reason"])

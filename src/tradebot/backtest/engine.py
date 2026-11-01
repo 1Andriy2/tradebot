@@ -14,6 +14,7 @@ import pandas as pd
 
 from tradebot import indicators as ind
 from tradebot.config import CostsConfig, RiskParams
+from tradebot.data.funding import funding_per_bar
 from tradebot.paper import PaperBook
 from tradebot.policy import DecisionPolicy
 from tradebot.risk import HARD_LIMITS, HardLimits, RiskManager
@@ -39,8 +40,10 @@ def run_backtest(
     initial_equity: float = 10_000.0,
     limits: HardLimits = HARD_LIMITS,
     signal: pd.Series | None = None,
+    funding: pd.Series | None = None,
 ) -> BacktestResult:
-    """Run one strategy over OHLCV ``df``. ``signal`` overrides ``strategy.signal(df)``."""
+    """Run one strategy over OHLCV ``df``. ``signal`` overrides ``strategy.signal(df)``;
+    ``funding`` (rates at funding timestamps) charges perpetual funding on open positions."""
     if len(df) < 2:
         raise ValueError("need at least two bars")
     sig = (signal if signal is not None else strategy.signal(df)).reindex(df.index).fillna(0.0)
@@ -49,6 +52,7 @@ def run_backtest(
     o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
     idx = df.index
     days = pd.DatetimeIndex(idx).date
+    fund_v = funding_per_bar(pd.DatetimeIndex(idx), funding).to_numpy(float)
 
     risk = RiskManager(risk_params, limits)
     policy = DecisionPolicy(risk)
@@ -60,7 +64,7 @@ def run_backtest(
     n = len(df)
     for i in range(n):
         bar = Bar(idx[i], days[i], o[i], h[i], lo[i], c[i], float(sig_v[i]),
-                  float(atr_v[i - 1]) if i > 0 else float("nan"))
+                  float(atr_v[i - 1]) if i > 0 else float("nan"), float(fund_v[i]))
         step_bar(book, state, policy, bar, strategy.uses_stops, allow_order=i + 1 < n)
         eq = book.equity(c[i])
         equity[i] = eq

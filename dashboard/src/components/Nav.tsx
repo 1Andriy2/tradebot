@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/chart", label: "Графік" },
   { href: "/trades", label: "Угоди" },
   { href: "/leaderboard", label: "Рейтинг" },
+  { href: "/research", label: "Дослідження" },
   { href: "/training", label: "Навчання" },
   { href: "/events", label: "Журнал" },
   { href: "/status", label: "Статус" },

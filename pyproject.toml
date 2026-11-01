@@ -40,6 +40,7 @@ dev = [
     "mypy>=1.10",
     "pandas-stubs",
     "types-PyYAML",
+    "hypothesis>=6.100",
 ]
 
 [build-system]

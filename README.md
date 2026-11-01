@@ -14,6 +14,7 @@
 |---|---|---|
 | Торговий крок кожні 15 хв | GitHub Actions (`trade.yml`) | бере свіжі свічки, приймає рішення, ставить ордери на демо-рахунку OKX |
 | Нічне перенавчання | GitHub Actions (`retrain.yml`) | LightGBM + walk-forward + champion/challenger |
+| Нічне дослідження | GitHub Actions (`research.yml`) | 12 сімейств стратегій × 3 таймфрейми × 2 пари walk-forward + пошук повторюваних патернів |
 | RL-агент | GitHub Actions (щотижня, CPU) або Kaggle (GPU) | PPO вчиться торгувати в симуляторі |
 | База даних і файли моделей | Supabase (безкоштовно) | угоди, рішення, метрики, версії моделей |
 | Дашборд | Vercel Hobby (безкоштовно) | графіки й таблиці українською, вхід за паролем |
@@ -148,6 +149,7 @@ docker compose logs -f trader
 | `daemon` | крок після кожної 15-хвилинної свічки (режим сервера) |
 | `retrain [--sync]` | нічне перенавчання LightGBM з champion/challenger |
 | `rl-train [--timesteps N] [--device cuda]` | навчання RL-агента з champion/challenger |
+| `research [--families ...] [--workers N]` | дослідження всіх стратегій і патернів (результати — на сторінці «Дослідження») |
 | `maintenance` | видаляє старі записи, щоб не вийти за межі безкоштовного тарифу Supabase |
 | `reset-kill-switch --agent A --venue demo --symbol S --equity E` | ручне скидання kill switch (рішення людини) |
 

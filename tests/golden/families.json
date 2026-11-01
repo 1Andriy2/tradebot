@@ -1,0 +1,74 @@
+{
+ "adx_trend": {
+  "max_drawdown": 0.01612933,
+  "num_trades": 77.0,
+  "total_return": 0.02148627,
+  "win_rate": 0.42857143
+ },
+ "bb_breakout": {
+  "max_drawdown": 0.02879735,
+  "num_trades": 90.0,
+  "total_return": 0.01033722,
+  "win_rate": 0.38888889
+ },
+ "buy_hold": {
+  "max_drawdown": 0.07631147,
+  "num_trades": 1.0,
+  "total_return": -0.02036491,
+  "win_rate": 0.0
+ },
+ "donchian": {
+  "max_drawdown": 0.04373212,
+  "num_trades": 90.0,
+  "total_return": -0.00390793,
+  "win_rate": 0.36666667
+ },
+ "grid": {
+  "max_drawdown": 0.0657407,
+  "num_trades": 135.0,
+  "total_return": -0.06213319,
+  "win_rate": 0.63703704
+ },
+ "keltner": {
+  "max_drawdown": 0.02298118,
+  "num_trades": 107.0,
+  "total_return": 0.00931236,
+  "win_rate": 0.39252336
+ },
+ "ma_cross": {
+  "max_drawdown": 0.02375439,
+  "num_trades": 43.0,
+  "total_return": 0.00428607,
+  "win_rate": 0.30232558
+ },
+ "macd": {
+  "max_drawdown": 0.07717831,
+  "num_trades": 230.0,
+  "total_return": -0.0673395,
+  "win_rate": 0.29130435
+ },
+ "rsi_mr": {
+  "max_drawdown": 0.04525775,
+  "num_trades": 58.0,
+  "total_return": -0.04161625,
+  "win_rate": 0.46551724
+ },
+ "seasonality": {
+  "max_drawdown": 0.0,
+  "num_trades": 0.0,
+  "total_return": 0.0,
+  "win_rate": 0.0
+ },
+ "tsmom": {
+  "max_drawdown": 0.0655656,
+  "num_trades": 257.0,
+  "total_return": -0.05611749,
+  "win_rate": 0.25680934
+ },
+ "zscore": {
+  "max_drawdown": 0.03964863,
+  "num_trades": 50.0,
+  "total_return": -0.03489401,
+  "win_rate": 0.5
+ }
+}

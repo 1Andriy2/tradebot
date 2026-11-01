@@ -51,3 +51,10 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — OKX sizing uses USDT equity only (single-currency margin), not the value of all demo coins.
 - 2026-11-01 — Hard position cap is enforced every bar: positions above 120% of the cap (25% × 2x of equity) are trimmed back with reason `risk_cap`, in backtests and live.
 - 2026-11-01 — Kill switch is never reset automatically; `tradebot reset-kill-switch` exists for an explicit human decision and logs an event.
+- 2026-11-01 — Goal shift (user): discover profitable strategies and repeating patterns; fees/slippage/funding are always counted in statistics, but strategies are not tuned to trade less just to save fees.
+- 2026-11-01 — Funding rates (Bybit history, OKX updates) are charged in all backtests on positions held through a funding time and recorded per trade (`trades.funding`).
+- 2026-11-01 — Strategy library: 12 families (buy & hold, MA cross, RSI, Bollinger, grid, Donchian, MACD, Keltner, time-series momentum, z-score reversion, ADX trend, hour-of-day seasonality) with parameter grids.
+- 2026-11-01 — Research = walk-forward parameter selection per family/symbol/timeframe (12-month train, 3-month test, 15m/1h/4h), OOS folds stitched into one backtest.
+- 2026-11-01 — Repeatability metrics: share of profitable test folds, per-fold returns, and Deflated Sharpe Ratio over all configurations tried in a run.
+- 2026-11-01 — Pattern scan: hour-of-day and day-of-week return effects with Benjamini-Hochberg q-values; "stable" = same sign and p < 0.05 in both halves of history.
+- 2026-11-01 — Tests: hypothesis property tests (equity = initial + trade PnL; exposure bounded by caps) and a golden regression file for every strategy family.

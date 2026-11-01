@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import sys
 
@@ -25,10 +26,16 @@ def _store(args: argparse.Namespace) -> Store:
 
 
 def _download(settings: Settings) -> None:
+    from tradebot.data.funding import update_funding
+
     client = make_public_client(settings.venue.exchange_id)
     for symbol in settings.markets.symbols:
         for tf in settings.markets.timeframes:
             update_cache(client, settings.data_path, symbol, tf, settings.markets.history_start)
+        try:
+            update_funding(client, settings.data_path, symbol, settings.markets.history_start)
+        except Exception:  # funding is optional; candles are what training needs
+            log.exception("funding update failed for %s", symbol)
 
 
 def _prepare_data(settings: Settings, args: argparse.Namespace, store: Store | None) -> None:
@@ -128,6 +135,36 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
+    from tradebot.data.funding import load_funding
+    from tradebot.research.lab import ResearchConfig, run_research
+    from tradebot.research.patterns import scan_seasonality
+
+    store = _store(args)
+    _prepare_data(settings, args, store)
+    dfs = _load_trade_frames(settings)
+    funding = {s: load_funding(settings.data_path, s) for s in settings.markets.symbols}
+    cfg = ResearchConfig(workers=args.workers, initial_equity=settings.backtest.initial_equity)
+    if args.families:
+        cfg = dataclasses.replace(cfg, families=tuple(args.families))
+    run_id, results = run_research(dfs, funding, settings.costs, settings.risk, cfg)
+    now = pd.Timestamp.now(tz="UTC")
+    store.insert("research_results", [{"run_id": run_id, "created_at": now, **r} for r in results])
+    patterns = []
+    for s in settings.markets.symbols:
+        patterns += scan_seasonality(load_cached(settings.data_path, s, "1h"), s)
+    store.insert("patterns", [{"run_id": run_id, "created_at": now, **p} for p in patterns])
+    best = sorted(results, key=lambda r: r["metrics"]["dsr"], reverse=True)[:10]
+    for r in best:
+        m = r["metrics"]
+        print(f"{r['family']:12s} {r['symbol']:15s} {r['timeframe']:4s} return={m['total_return']:+.3f} "
+              f"sortino={m['sortino']:+.2f} dsr={m['dsr']:.2f} folds_won={m['fold_win_rate']:.2f} "
+              f"trades={int(m['num_trades'])} fees={m['fees_paid']:.0f} funding={m['funding_paid']:.0f}")
+    stable = [p for p in patterns if p["stable"] and p["q_value"] < 0.1]
+    print(f"run {run_id}: {len(results)} results, {len(stable)} stable patterns")
+    return 0
+
+
 def cmd_reset_kill_switch(settings: Settings, args: argparse.Namespace) -> int:
     """Manual (human) reset of a tripped kill switch for one agent/venue/symbol."""
     from tradebot.policy import PolicyState
@@ -181,6 +218,10 @@ def build_parser() -> argparse.ArgumentParser:
     rl.add_argument("--device", default="auto", help="auto | cpu | cuda")
     _data_flags(rl)
     sub.add_parser("maintenance", help="prune old rows in Supabase (free-tier housekeeping)")
+    rs = sub.add_parser("research", help="walk-forward scan of all strategy families and patterns")
+    rs.add_argument("--workers", type=int, default=4)
+    rs.add_argument("--families", nargs="*", help="subset of strategy families")
+    _data_flags(rs)
     ks = sub.add_parser("reset-kill-switch", help="manually reset a tripped kill switch (human decision)")
     ks.add_argument("--agent", required=True)
     ks.add_argument("--venue", choices=["demo", "shadow"], required=True)
@@ -192,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = {"download": cmd_download, "backtest": cmd_backtest, "step": cmd_step, "daemon": cmd_daemon,
             "retrain": cmd_retrain, "rl-train": cmd_rl_train, "maintenance": cmd_maintenance,
-            "reset-kill-switch": cmd_reset_kill_switch}
+            "reset-kill-switch": cmd_reset_kill_switch, "research": cmd_research}
 
 
 def main(argv: list[str] | None = None) -> int:

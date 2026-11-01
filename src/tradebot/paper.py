@@ -38,6 +38,17 @@ class PaperBook:
         if abs(qty) > EPS:
             self._execute(ts, qty, ref_price, reason, slippage)
 
+    def apply_funding(self, rate: float, price: float) -> float:
+        """Pay (rate > 0, long) or receive funding on the open position; returns the payment."""
+        if abs(self.units) < EPS or rate == 0.0:
+            return 0.0
+        payment = self.units * price * rate
+        self.cash -= payment
+        assert self._open is not None
+        self._open["cash_flow"] = float(self._open["cash_flow"]) - payment  # type: ignore[arg-type]
+        self._open["funding"] = float(self._open.get("funding", 0.0)) + payment  # type: ignore[arg-type]
+        return payment
+
     def drain(self) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         """Return and clear completed fills and trades."""
         fills, trades = self.fills, self.trades
@@ -55,7 +66,7 @@ class PaperBook:
         new_units = self.units + qty
         if self.units == 0:
             self._open = {"entry_time": ts, "side": "long" if qty > 0 else "short",
-                          "entry_reason": reason, "cash_flow": 0.0, "fees": 0.0,
+                          "entry_reason": reason, "cash_flow": 0.0, "fees": 0.0, "funding": 0.0,
                           "max_units": 0.0, "entry_price": price}
             self.avg_entry = price
         elif np.sign(qty) == np.sign(self.units):
@@ -76,7 +87,7 @@ class PaperBook:
                 "entry_time": t["entry_time"], "exit_time": ts, "side": t["side"],
                 "entry_price": t["entry_price"], "exit_price": price,
                 "entry_reason": t["entry_reason"], "exit_reason": reason,
-                "pnl": t["cash_flow"], "fees": t["fees"],
+                "pnl": t["cash_flow"], "fees": t["fees"], "funding": t.get("funding", 0.0),
                 "return_pct": float(t["cash_flow"]) / notional if notional else 0.0,  # type: ignore[arg-type]
             })
             self._open = None
