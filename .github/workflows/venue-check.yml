@@ -1,4 +1,4 @@
-# Manual check: can GitHub-hosted runners reach Bybit (demo + public market data)?
+# Manual check: which demo venues can GitHub-hosted runners reach?
 name: Venue reachability check
 
 on:
@@ -11,9 +11,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: HTTP status of Bybit endpoints from this runner
+      - name: HTTP status of demo/market-data endpoints from this runner
         run: |
-          for url in https://api-demo.bybit.com/v5/market/time https://api.bybit.com/v5/market/time; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+          for url in \
+            https://api-demo.bybit.com/v5/market/time \
+            https://api.bybit.com/v5/market/time \
+            https://demo-futures.kraken.com/derivatives/api/v3/tickers \
+            https://futures.kraken.com/derivatives/api/v3/tickers \
+            https://www.okx.com/api/v5/public/time \
+            https://api.bitget.com/api/v2/public/time; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url")
             echo "$url -> $code"
           done
