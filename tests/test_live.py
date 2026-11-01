@@ -168,3 +168,28 @@ def test_demo_failure_does_not_stop_other_agents() -> None:
     assert store.select("agent_state", {"agent_id": "other", "venue": "shadow"})
     assert store.select("bot_status")[0]["last_error"]
 
+
+
+def test_manual_kill_switch_reset_reenables_trading() -> None:
+    from tradebot.cli import build_parser, cmd_reset_kill_switch
+
+    public, venue = FakePublic(), FakeVenue()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    venue._equity = 7_000.0  # trips the kill switch
+    public.add_bar(100.0)
+    trader.step()
+    assert venue.units["BTC/USDT:USDT"] == pytest.approx(0.0)
+
+    args = build_parser().parse_args(["reset-kill-switch", "--agent", "ma_cross", "--venue", "demo",
+                                      "--symbol", "BTC/USDT:USDT", "--equity", "7000"])
+    import tradebot.cli as cli
+    cli_store = cli._store
+    cli._store = lambda _args: store  # type: ignore[assignment]
+    try:
+        assert cmd_reset_kill_switch(Settings(), args) == 0
+    finally:
+        cli._store = cli_store  # type: ignore[assignment]
+    public.add_bar(100.0)
+    trader.step()
+    assert venue.units["BTC/USDT:USDT"] > 0

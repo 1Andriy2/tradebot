@@ -149,6 +149,7 @@ docker compose logs -f trader
 | `retrain [--sync]` | нічне перенавчання LightGBM з champion/challenger |
 | `rl-train [--timesteps N] [--device cuda]` | навчання RL-агента з champion/challenger |
 | `maintenance` | видаляє старі записи, щоб не вийти за межі безкоштовного тарифу Supabase |
+| `reset-kill-switch --agent A --venue demo --symbol S --equity E` | ручне скидання kill switch (рішення людини) |
 
 ## Чесно про результати
 

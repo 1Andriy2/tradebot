@@ -128,6 +128,31 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reset_kill_switch(settings: Settings, args: argparse.Namespace) -> int:
+    """Manual (human) reset of a tripped kill switch for one agent/venue/symbol."""
+    from tradebot.policy import PolicyState
+
+    store = _store(args)
+    key = {"agent_id": args.agent, "venue": args.venue, "symbol": args.symbol}
+    rows = store.select("agent_state", key)
+    if not rows:
+        print(f"no state for {key}")
+        return 1
+    row = rows[0]
+    state = PolicyState.from_dict(row["state"]["policy"])
+    state.risk.killed = False
+    state.risk.halted_day = None
+    state.risk.peak_equity = args.equity
+    state.risk.day_start_equity = args.equity
+    row["state"]["policy"] = state.to_dict()
+    store.upsert("agent_state", [{**key, "state": row["state"]}], on_conflict="agent_id,venue,symbol")
+    store.insert("events", [{"ts": pd.Timestamp.now(tz="UTC"), "type": "info", "agent_id": args.agent,
+                             "message": f"kill switch reset manually for {args.venue}/{args.symbol}; "
+                                        f"new peak equity {args.equity}", "details": {}}])
+    print(f"kill switch reset for {key}, peak equity = {args.equity}")
+    return 0
+
+
 def _data_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     p.add_argument("--no-download", action="store_true", help="use cached candles as they are")
@@ -156,11 +181,18 @@ def build_parser() -> argparse.ArgumentParser:
     rl.add_argument("--device", default="auto", help="auto | cpu | cuda")
     _data_flags(rl)
     sub.add_parser("maintenance", help="prune old rows in Supabase (free-tier housekeeping)")
+    ks = sub.add_parser("reset-kill-switch", help="manually reset a tripped kill switch (human decision)")
+    ks.add_argument("--agent", required=True)
+    ks.add_argument("--venue", choices=["demo", "shadow"], required=True)
+    ks.add_argument("--symbol", required=True)
+    ks.add_argument("--equity", type=float, required=True, help="equity to use as the new peak")
+    ks.add_argument("--memory-store", action="store_true", help=argparse.SUPPRESS)
     return p
 
 
 COMMANDS = {"download": cmd_download, "backtest": cmd_backtest, "step": cmd_step, "daemon": cmd_daemon,
-            "retrain": cmd_retrain, "rl-train": cmd_rl_train, "maintenance": cmd_maintenance}
+            "retrain": cmd_retrain, "rl-train": cmd_rl_train, "maintenance": cmd_maintenance,
+            "reset-kill-switch": cmd_reset_kill_switch}
 
 
 def main(argv: list[str] | None = None) -> int:
