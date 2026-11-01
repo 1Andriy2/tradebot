@@ -21,8 +21,8 @@ __pycache__/
 htmlcov/
 
 # Data & models (stored in Supabase Storage, not git)
-data/
-models/
+/data/
+/models/
 *.parquet
 *.zip
 
