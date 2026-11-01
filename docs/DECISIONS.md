@@ -48,3 +48,5 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — Orders are sized in base units and converted to contracts via `contractSize` (OKX BTC swap = 0.01 BTC); one-way (net) position mode, cross margin.
 - 2026-11-01 — History before November 2026 comes from the Bybit cache; GitHub jobs append newer candles from OKX's public API.
 - 2026-11-01 — Live step isolates failures per agent and symbol; a demo-venue error is logged but never stops shadow agents.
+- 2026-11-01 — OKX sizing uses USDT equity only (single-currency margin), not the value of all demo coins.
+- 2026-11-01 — Hard position cap is enforced every bar: positions above 120% of the cap (25% × 2x of equity) are trimmed back with reason `risk_cap`, in backtests and live.

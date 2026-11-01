@@ -167,3 +167,4 @@ def test_demo_failure_does_not_stop_other_agents() -> None:
     assert len(report.errors) == 1 and "ma_cross" in report.errors[0]
     assert store.select("agent_state", {"agent_id": "other", "venue": "shadow"})
     assert store.select("bot_status")[0]["last_error"]
+

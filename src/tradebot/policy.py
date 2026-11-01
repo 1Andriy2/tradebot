@@ -10,6 +10,8 @@ from typing import Any
 from tradebot.risk import RiskManager, RiskState
 
 EPS = 1e-12
+CAP_TOLERANCE = 1.2  # trim only when a position exceeds the hard cap by more than 20%
+RISK_CAP = "risk_cap"
 
 
 @dataclass
@@ -73,6 +75,12 @@ class DecisionPolicy:
         ):
             target = self.risk.target_units(signal, equity, price)
         state.prev_sig = signal
+        # Hard cap on every bar: a position may outgrow the cap (equity drop, price move,
+        # external change); trim it back instead of waiting for a signal change.
+        lim = self.risk.limits
+        cap = lim.max_position_frac * lim.max_leverage * max(equity, 0.0) / price
+        if abs(target) > cap * CAP_TOLERANCE:
+            target, reason = (cap if target > 0 else -cap), RISK_CAP
         if abs(target - units) <= EPS:
             return None
         return Decision(target, reason)

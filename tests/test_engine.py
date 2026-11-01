@@ -23,11 +23,14 @@ class AlwaysLong(Strategy):
         return pd.Series(1.0, index=df.index)
 
 
+SMALL = RiskParams(position_frac=0.1, leverage=1.0, stop_atr_mult=None, take_atr_mult=None)
+
+
 def test_buy_hold_tracks_price_without_costs() -> None:
     df = make_ohlcv(np.linspace(100, 200, 50))
-    res = run_backtest(df, BuyHold(), NO_COSTS, NO_STOPS, 1000.0, limits=LOOSE)
-    # Entry at bar 1 open (=bar 0 close=100), exit at last close (200); notional 50% of equity.
-    assert res.equity.iloc[-1] == pytest.approx(1000 * (1 + 0.5 * 1.0))
+    res = run_backtest(df, BuyHold(), NO_COSTS, SMALL, 1000.0, limits=LOOSE)
+    # Entry at bar 1 open (=bar 0 close=100), exit at last close (200); notional 10% of equity.
+    assert res.equity.iloc[-1] == pytest.approx(1000 * (1 + 0.1 * 1.0))
     assert len(res.trades) == 1
     assert res.trades.iloc[0]["exit_reason"] == "end_of_test"
 
@@ -35,8 +38,8 @@ def test_buy_hold_tracks_price_without_costs() -> None:
 def test_short_profits_when_price_falls() -> None:
     df = make_ohlcv(np.linspace(200, 100, 50))
     sig = pd.Series(-1.0, index=df.index)
-    res = run_backtest(df, BuyHold(), NO_COSTS, NO_STOPS, 1000.0, limits=LOOSE, signal=sig)
-    assert res.equity.iloc[-1] == pytest.approx(1000 * (1 + 0.5 * 0.5))
+    res = run_backtest(df, BuyHold(), NO_COSTS, SMALL, 1000.0, limits=LOOSE, signal=sig)
+    assert res.equity.iloc[-1] == pytest.approx(1000 * (1 + 0.1 * 0.5))
     assert res.trades.iloc[0]["side"] == "short"
 
 
@@ -89,7 +92,9 @@ def test_hard_caps_clip_learned_params() -> None:
     df = make_ohlcv(np.linspace(100, 200, 50))
     greedy = RiskParams(position_frac=5.0, leverage=50.0, stop_atr_mult=None, take_atr_mult=None)
     res = run_backtest(df, BuyHold(), NO_COSTS, greedy, 1000.0, limits=LOOSE)
-    assert res.exposure.max() <= 0.25 * 2.0 * 2 + 1e-9  # notional cap, grown at most by the 2x move
+    # Entry at the 50% notional cap; growth above 120% of the cap is trimmed back.
+    assert res.exposure.max() <= 0.25 * 2.0 * 1.2 + 0.02
+    assert (res.fills["reason"] == "risk_cap").any()
 
 
 def test_all_baselines_run(random_walk: pd.DataFrame) -> None:

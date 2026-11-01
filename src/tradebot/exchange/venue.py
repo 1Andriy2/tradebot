@@ -75,8 +75,11 @@ class CcxtDemoVenue:
             if self.exchange_id == "bybit":
                 return float(raw["result"]["list"][0]["totalEquity"])
             if self.exchange_id == "okx":
-                return float(raw["data"][0]["totalEq"])
-        except (KeyError, IndexError, TypeError, ValueError):
+                # Single-currency margin: only USDT backs USDT perpetuals, so size from USDT
+                # equity, not from the value of every coin in the demo account.
+                usdt = next(d for d in raw["data"][0]["details"] if d["ccy"] == "USDT")
+                return float(usdt["eq"])
+        except (KeyError, IndexError, StopIteration, TypeError, ValueError):
             pass
         return float(info["total"]["USDT"])
 
