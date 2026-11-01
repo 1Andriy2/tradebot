@@ -1,0 +1,41 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+**/token*
+**/*credentials*.json
+.claude/settings.local.json
+# Project-local CLI config (gh etc.)
+.local/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Data & models (stored in Supabase Storage, not git)
+data/
+models/
+*.parquet
+*.zip
+
+# Node / Next.js
+node_modules/
+.next/
+.vercel/
+out/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Local config overrides
+config/local.yaml

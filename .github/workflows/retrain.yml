@@ -1,0 +1,32 @@
+# Nightly retraining (LightGBM walk-forward + champion/challenger) and DB housekeeping.
+name: Nightly retrain
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --extra ml --extra rl --extra db --frozen
+      - name: Retrain LightGBM
+        run: uv run tradebot retrain --sync
+      - name: Prune old rows (free-tier storage)
+        run: uv run tradebot maintenance

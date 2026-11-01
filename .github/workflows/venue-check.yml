@@ -1,0 +1,19 @@
+# Manual check: can GitHub-hosted runners reach Bybit (demo + public market data)?
+name: Venue reachability check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: HTTP status of Bybit endpoints from this runner
+        run: |
+          for url in https://api-demo.bybit.com/v5/market/time https://api.bybit.com/v5/market/time; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+            echo "$url -> $code"
+          done

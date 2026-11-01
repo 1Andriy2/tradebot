@@ -1,0 +1,27 @@
+# Default configuration. Override with config/local.yaml (gitignored) or TRADEBOT_* env vars.
+
+venue:
+  exchange_id: bybit   # only venues registered in tradebot.exchange.guard are accepted
+
+markets:
+  symbols: ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+  timeframes: ["15m", "1h"]
+  trade_timeframe: "15m"
+  history_start: "2020-01-01"
+
+costs:
+  fee_rate: 0.001        # per side
+  slippage_rate: 0.0005  # per side
+
+backtest:
+  initial_equity: 10000.0
+
+# Defaults for learnable risk parameters (always clipped to hard caps in tradebot.risk).
+risk:
+  position_frac: 0.10
+  leverage: 1.0
+  stop_atr_mult: 3.0
+  take_atr_mult: 6.0
+  atr_period: 14
+
+data_dir: "data"

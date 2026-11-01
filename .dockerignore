@@ -1,0 +1,12 @@
+.env
+.env.*
+.venv
+.git
+data
+models
+dashboard
+notebooks
+tests
+.claude
+.local
+**/__pycache__

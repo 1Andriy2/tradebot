@@ -1,0 +1,31 @@
+# 24/7 server mode (any free Linux VM). Secrets come from .env next to this file.
+services:
+  trader:
+    build: .
+    command: ["daemon"]
+    env_file: .env
+    restart: unless-stopped
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+
+  trainer:
+    build: .
+    entrypoint: ["/bin/sh", "-c"]
+    # Nightly: retrain with champion/challenger, then prune old rows.
+    command:
+      - |
+        while true; do
+          now=$$(date -u +%s); next=$$(date -u -d "tomorrow 02:17" +%s)
+          sleep $$((next - now))
+          tradebot retrain --sync || echo "retrain failed"
+          tradebot maintenance || echo "maintenance failed"
+        done
+    env_file: .env
+    volumes:
+      - candles:/app/data
+    restart: unless-stopped
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  candles:

@@ -1,0 +1,31 @@
+# Small-budget RL training on CPU (weekly). Large runs use notebooks/rl_kaggle.ipynb.
+name: RL train (CPU)
+
+on:
+  schedule:
+    - cron: "43 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      timesteps:
+        description: "PPO timesteps"
+        default: "300000"
+
+permissions:
+  contents: read
+
+jobs:
+  rl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --extra ml --extra rl --extra db --frozen
+      - name: Train PPO
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TIMESTEPS: ${{ inputs.timesteps || '300000' }}
+        run: uv run tradebot rl-train --sync --no-download --device cpu --timesteps "$TIMESTEPS"

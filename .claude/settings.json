@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "enabledMcpjsonServers": ["supabase", "github"],
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Bash(cat .env*)",
+      "Bash(gh auth login*)",
+      "Bash(gh auth switch*)",
+      "Bash(git config --global*)",
+      "Bash(git config --system*)",
+      "Bash(claude mcp add * --scope user*)",
+      "Bash(claude mcp add * -s user*)",
+      "Bash(claude plugin install * --scope user*)",
+      "Bash(vercel login*)",
+      "Bash(npx vercel login*)",
+      "Bash(supabase login*)",
+      "Bash(npx supabase login*)"
+    ]
+  }
+}

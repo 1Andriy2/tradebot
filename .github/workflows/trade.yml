@@ -1,0 +1,44 @@
+# Cron mode: one trading step per closed 15m candle. The bot starts, trades, exits.
+name: Trade step
+
+on:
+  schedule:
+    - cron: "1,16,31,46 * * * *"  # one minute after each 15m candle closes
+  workflow_dispatch:
+    inputs:
+      shadow_only:
+        description: "Paper agents only (no demo orders)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trade-step
+  cancel-in-progress: false
+
+jobs:
+  step:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - run: uv sync --extra ml --extra rl --extra db --frozen
+      - name: Trading step
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EXCHANGE_ID: bybit
+          EXCHANGE_API_KEY: ${{ secrets.EXCHANGE_API_KEY }}
+          EXCHANGE_API_SECRET: ${{ secrets.EXCHANGE_API_SECRET }}
+          SHADOW_ONLY: ${{ inputs.shadow_only }}
+        run: |
+          if [ "$SHADOW_ONLY" = "true" ]; then
+            uv run tradebot step --shadow-only
+          else
+            uv run tradebot step
+          fi

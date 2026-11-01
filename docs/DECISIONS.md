@@ -1,0 +1,44 @@
+# Decisions
+
+One line per decision. Newest at the bottom.
+
+- 2026-11-01 — Demo venue: Bybit Demo Trading (`api-demo.bybit.com`), USDT linear perpetuals, long and short.
+- 2026-11-01 — Hosting: no Oracle; GitHub Actions cron (one-shot step every 15 min, public repo) + Kaggle for GPU training + Vercel Hobby for the dashboard.
+- 2026-11-01 — Hard risk caps (code constants, never learned): position ≤ 25% of equity, leverage ≤ 2x, daily loss ≤ 5%, kill switch at 20% drawdown from peak.
+- 2026-11-01 — Learnable risk params (position fraction, leverage, ATR stop/take multiples, entry threshold) are tuned in walk-forward and clipped to the hard caps.
+- 2026-11-01 — Env loading via `scripts/with-env.sh` instead of direnv (no global shell hook).
+- 2026-11-01 — Project MCP: Supabase (read-only, project-scoped) + GitHub (read-only) in `.mcp.json`; no Vercel MCP (OAuth-only, can make purchases) — Vercel CLI with `VERCEL_TOKEN` instead.
+- 2026-11-01 — Python 3.11 managed by `uv` in a project `.venv`; single `pyproject.toml` at repo root.
+- 2026-11-01 — The project does not call the Claude API (paid); if ever needed it must use andrijkostelnij72@gmail.com.
+- 2026-11-01 — Own bar-by-bar backtest engine instead of vectorbt/backtesting.py: futures long/short, leverage, intrabar stops and the same RiskManager as live trading.
+- 2026-11-01 — Strategies emit a target exposure in [-1, 1] per bar from data up to that bar's close; orders fill at the next bar's open plus slippage (no look-ahead).
+- 2026-11-01 — Costs in every test: 0.1% fee per side + 0.05% slippage per side; funding payments are not modelled (documented limitation).
+- 2026-11-01 — Endpoint allowlist is a code constant; every authenticated HTTP request is host-checked and a non-demo host raises immediately.
+- 2026-11-01 — Historical candles come from Bybit's public market-data API via a separate client that never holds keys.
+- 2026-11-01 — Local candle cache: Parquet files in `data/` (gitignored), incremental updates.
+- 2026-11-01 — Primary ranking metric for champion/challenger: Sortino ratio on out-of-sample folds, with a minimum trade count.
+- 2026-11-01 — Backtester and live shadow agents share one bar step (`simulate.step_bar`) and one `DecisionPolicy`, so live rules equal tested rules.
+- 2026-11-01 — Every agent runs as a shadow paper book on live candles; only the champion also trades the Bybit demo account.
+- 2026-11-01 — Demo sizing uses account equity / number of symbols; stop-loss and take-profit are attached to the entry order on the exchange.
+- 2026-11-01 — Steps are idempotent per closed bar (`agent_state.last_bar`), so duplicate cron runs never double-trade.
+- 2026-11-01 — Default champion until the first ML model is promoted: `ma_cross`.
+- 2026-11-01 — Bot writes with the Supabase service-role key (server only); dashboard reads with anon key + Auth, SELECT-only RLS for `authenticated`.
+- 2026-11-01 — Free-tier storage: candles kept 60 days, `hold` decisions 90 days (`prune_old_rows()`).
+- 2026-11-01 — Dashboard: Next.js 16 (App Router, `src/proxy.ts` auth gate), client-side reads via `@supabase/ssr` browser client + Realtime; times shown in Europe/Kyiv.
+- 2026-11-01 — ML: one pooled LightGBM (BTC+ETH) predicting the 8h (32-bar) direction; 1h features resampled from 15m so training and live use identical code.
+- 2026-11-01 — Walk-forward: 24-month rolling train, 3-month test folds, purge = label horizon; last 9 months are an untouched holdout.
+- 2026-11-01 — Optuna (30 trials) tunes signal threshold/smoothing and risk params on the pre-holdout OOS period only.
+- 2026-11-01 — Promotion: challenger holdout Sortino > champion + 0.05, ≥ 30 trades, holdout max drawdown < 20%; one champion at a time across all agents.
+- 2026-11-01 — Live LightGBM model is refit on the latest 24 months after evaluation; LightGBM champions are re-scored via walk-forward (never by replaying a model on data it saw).
+- 2026-11-01 — Model files are JSON (LightGBM text model + config + risk params) in a private Supabase Storage bucket `models`.
+- 2026-11-01 — RL: PPO (Stable-Baselines3, MLP) with discrete short/flat/long actions; reward = log equity growth after fees/slippage − 2 × new drawdown; trained only on pre-holdout data.
+- 2026-11-01 — RL agent: fixed exposure 25% × 1x, no ATR stops (it manages exits); hard caps and kill switch still apply.
+- 2026-11-01 — Shared `registry` module handles versions, champion/challenger and model storage for both LightGBM and RL.
+- 2026-11-01 — Candle cache mirrored to Supabase Storage (`data` bucket, `--sync`) so CI/Kaggle training works even if the exchange API is unreachable there.
+- 2026-11-01 — Kaggle notebook installs the package from the public repo and calls `tradebot rl-train --sync --no-download` (secrets via Kaggle Secrets).
+- 2026-11-01 — macOS dev only: `OMP_NUM_THREADS=1` (torch + LightGBM OpenMP clash); Linux runs multi-threaded.
+- 2026-11-01 — Workflows: CI (ruff, mypy, pytest, dashboard lint/build), trade step at minute 1/16/31/46, nightly retrain 02:17 UTC + prune, weekly CPU RL, monthly keepalive commit, manual venue reachability check.
+- 2026-11-01 — Workflow inputs are passed via env (no `${{ }}` interpolation in shell) to avoid script injection.
+- 2026-11-01 — CPU-only PyTorch on Linux via a uv index, so the 15-minute job stays light.
+- 2026-11-01 — Server mode: one Docker image (python:3.11-slim, arm64/amd64), compose services `trader` (daemon) and `trainer` (nightly loop).
+- 2026-11-01 — Known risk: Bybit's CDN may block US cloud IPs (GitHub runners); verify with `venue-check.yml`. No proxy/geo-block circumvention will be used.
