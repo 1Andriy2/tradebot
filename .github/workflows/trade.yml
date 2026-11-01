@@ -3,7 +3,7 @@ name: Trade step
 
 on:
   schedule:
-    - cron: "1,16,31,46 * * * *"  # one minute after each 15m candle closes
+    - cron: "2,17,32,47 * * * *"  # two minutes after each 15m candle closes
   workflow_dispatch:
     inputs:
       shadow_only:
