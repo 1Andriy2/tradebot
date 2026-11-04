@@ -116,6 +116,10 @@ export interface ChampionRow {
   since: string;
 }
 
+export type RobustnessKey =
+  | "checks_passed" | "checks_total" | "robust" | "signal_q" | "pbo" | "pbo_universe" | "cpcv_positive_paths"
+  | "param_stability" | "mc_loss_prob" | "mc_ruin_prob" | "ulcer_index" | "cvar_5";
+
 export interface ResearchRow {
   id: number;
   run_id: string;
@@ -123,7 +127,7 @@ export interface ResearchRow {
   family: string;
   symbol: string;
   timeframe: string;
-  metrics: Record<string, number>;
+  metrics: Record<string, number> & Partial<Record<RobustnessKey, number | null>>;
   params: { latest?: Record<string, unknown>; folds?: { test_start: string; params: Record<string, unknown> }[] };
   fold_returns: number[];
 }

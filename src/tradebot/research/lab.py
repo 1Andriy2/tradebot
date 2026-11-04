@@ -9,7 +9,10 @@ For every (strategy family, symbol, timeframe):
 Besides the usual metrics, each result carries:
   * fold_win_rate  — share of test folds that made money (does the edge repeat?);
   * dsr            — Deflated Sharpe Ratio: probability that the true Sharpe is > 0 after
-                     correcting for how many configurations were tried (Bailey & López de Prado).
+                     correcting for how many configurations were tried (Bailey & López de Prado);
+  * robustness     — overfitting, significance and stress statistics, see research/robustness.py.
+
+These numbers only inform: nothing here changes which agent trades.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import logging
 import math
 import uuid
+import zlib
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
@@ -29,6 +33,9 @@ from tradebot.backtest.engine import run_backtest
 from tradebot.config import CostsConfig, RiskParams
 from tradebot.metrics import compute_metrics
 from tradebot.ml.features import resample_ohlcv
+from tradebot.research import robustness as rb
+from tradebot.research.patterns import bh_qvalues
+from tradebot.risk import HARD_LIMITS
 from tradebot.strategies.base import Strategy
 from tradebot.strategies.library import FAMILIES, make
 
@@ -48,6 +55,10 @@ class ResearchConfig:
     min_train_trades: int = 5
     initial_equity: float = 10_000.0
     workers: int = 4
+    robustness: bool = True
+    mc_sims: int = 2000
+    mc_mean_block: int = 10
+    ruin_drawdown: float = HARD_LIMITS.kill_switch_drawdown
 
 
 @dataclass
@@ -84,6 +95,61 @@ def to_timeframe(df15: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 def _score(m: dict[str, float], min_trades: int) -> float:
     return m["sortino"] if m["num_trades"] >= min_trades else -math.inf
+
+
+def _backtest_params(t: Task, params: dict[str, Any], fit_on: pd.DataFrame, win: pd.DataFrame) -> pd.Series:
+    """Equity of one fixed parameter set over the research window, indicators warmed up."""
+    strat = make(t.family, params)
+    strat.fit(fit_on)
+    sig = strat.signal(t.df).reindex(win.index)
+    return run_backtest(win, _Stitched(sig, strat.uses_stops), t.costs, t.risk, t.cfg.initial_equity,
+                        funding=t.funding).equity
+
+
+def _sortino_of(equity: pd.Series) -> float:
+    return compute_metrics(equity, pd.DataFrame())["sortino"]
+
+
+def _robustness(t: Task, win: pd.DataFrame, oos: pd.Series, equity: pd.Series, sortino: float,
+                folds: list[dict[str, Any]]) -> tuple[dict[str, float | None], pd.DataFrame]:
+    """Statistics for one task, plus its days x configurations return matrix for the run-level PBO.
+
+    Fitted families are fitted once on the data before the window, so the matrix stays
+    out-of-sample. Latest-parameter runs measure stability, they are not performance claims.
+    """
+    cfg = t.cfg
+    _, grid = FAMILIES[t.family]
+    fit_start = win.index[0] - pd.DateOffset(months=cfg.train_months)
+    fit_on = t.df[(t.df.index >= fit_start) & (t.df.index < win.index[0])]
+    daily = rb.daily_returns(equity)
+    columns = {f"{t.family}|{i}": rb.daily_returns(_backtest_params(t, p, fit_on, win))
+               for i, p in enumerate(grid)}
+    frame = pd.DataFrame(columns).fillna(0.0)
+
+    out: dict[str, float | None] = {
+        "ulcer_index": rb.ulcer_index(equity.resample("1D").last().ffill()),
+        "cvar_5": rb.cvar(daily),
+        "tail_ratio": rb.tail_ratio(daily),
+        "pbo": rb.pbo(frame.to_numpy()),
+        **rb.cpcv_stats(frame.to_numpy()),
+    }
+    rng = np.random.default_rng(zlib.crc32(f"{t.family}|{t.symbol}|{t.timeframe}".encode()))
+    out["signal_p"] = rb.rule_significance(oos, win["close"], cfg.mc_sims, cfg.mc_mean_block, rng)
+    if len(daily) >= rb.MIN_DAYS and daily.std() > 0:  # a strategy that never traded has no spread
+        sr = float(daily.mean() / daily.std())
+        out["psr"] = deflated_sharpe(sr, [sr], 1, float(len(daily)), float(stats.skew(daily)),
+                                     float(stats.kurtosis(daily, fisher=False)))
+        idx = rb.stationary_bootstrap_indices(len(daily), cfg.mc_sims, cfg.mc_mean_block, rng)
+        out.update(rb.monte_carlo(daily.to_numpy(), idx, cfg.ruin_drawdown))
+
+    latest = folds[-1]["params"] if folds else {}
+    moved = [_sortino_of(_backtest_params(t, p, fit_on, win)) for p in rb.perturbed_params(latest)]
+    base = _sortino_of(_backtest_params(t, latest, fit_on, win)) if moved else 0.0
+    out["param_stability"] = rb.param_stability(base, moved)
+    train_scores = [f["train_score"] for f in folds if f["train_score"] is not None]
+    train_mean = float(np.mean(train_scores)) if train_scores else 0.0
+    out["wf_retention"] = sortino / train_mean if train_mean > 0 else None
+    return out, frame
 
 
 def run_task(t: Task) -> dict[str, Any]:
@@ -125,7 +191,7 @@ def run_task(t: Task) -> dict[str, Any]:
     win = df[df.index >= first]
     res = run_backtest(win, _Stitched(oos, uses_stops), t.costs, t.risk, cfg.initial_equity,
                        funding=t.funding)
-    m = compute_metrics(res.equity, res.trades, win["close"])
+    m: dict[str, Any] = dict(compute_metrics(res.equity, res.trades, win["close"]))
 
     # Did the edge repeat? Return of each test fold, from the stitched equity curve.
     fold_rets = []
@@ -149,9 +215,16 @@ def run_task(t: Task) -> dict[str, Any]:
         "n_obs": float(len(rets)),
         "grid_size": float(len(grid)),
     })
-    return {"family": t.family, "symbol": t.symbol, "timeframe": t.timeframe,
-            "metrics": m, "params": {"folds": folds, "latest": folds[-1]["params"] if folds else {}},
-            "fold_returns": fold_rets}
+    result: dict[str, Any] = {
+        "family": t.family, "symbol": t.symbol, "timeframe": t.timeframe,
+        "metrics": m, "params": {"folds": folds, "latest": folds[-1]["params"] if folds else {}},
+        "fold_returns": fold_rets,
+    }
+    if cfg.robustness:
+        extra, result["_returns"] = _robustness(t, win, oos[oos.index >= first], res.equity,
+                                                m["sortino"], folds)
+        m.update(extra)
+    return result
 
 
 def deflated_sharpe(sr: float, sr_trials: list[float], n_trials: int, n_obs: float,
@@ -168,6 +241,36 @@ def deflated_sharpe(sr: float, sr_trials: list[float], n_trials: int, n_obs: flo
         sr0 = 0.0
     denom = math.sqrt(max(1e-12, 1 - skew * sr + (kurtosis - 1) / 4 * sr**2))
     return float(stats.norm.cdf((sr - sr0) * math.sqrt(n_obs - 1) / denom))
+
+
+def _peer_profit_share(
+    row: dict[str, Any], results: list[dict[str, Any]], same: str, other: str
+) -> float | None:
+    """Share of the same family's results on other values of ``other`` that made money."""
+    peers = [r for r in results if r["family"] == row["family"] and r[same] == row[same]
+             and r[other] != row[other]]
+    return float(np.mean([r["metrics"]["total_return"] > 0 for r in peers])) if peers else None
+
+
+def _add_run_level_robustness(results: list[dict[str, Any]]) -> None:
+    """Statistics that need the whole run: multiple testing, peers, and PBO across families."""
+    frames = [r.pop("_returns") for r in results]
+    universe: dict[tuple[str, str], float | None] = {}
+    for key in {(r["symbol"], r["timeframe"]) for r in results}:
+        group = [f for r, f in zip(results, frames, strict=True) if (r["symbol"], r["timeframe"]) == key]
+        universe[key] = rb.pbo(pd.concat(group, axis=1).fillna(0.0).to_numpy())
+
+    tested = [r for r in results if r["metrics"].get("signal_p") is not None]
+    if tested:
+        q_values = bh_qvalues(np.array([r["metrics"]["signal_p"] for r in tested]))
+        for r, q in zip(tested, q_values, strict=True):
+            r["metrics"]["signal_q"] = float(q)
+    for r in results:
+        m = r["metrics"]
+        m["pbo_universe"] = universe[(r["symbol"], r["timeframe"])]
+        m["peer_pair_profitable"] = _peer_profit_share(r, results, "timeframe", "symbol")
+        m["peer_tf_profitable"] = _peer_profit_share(r, results, "symbol", "timeframe")
+        m.update(rb.verdict(m))
 
 
 def run_research(
@@ -190,4 +293,6 @@ def run_research(
         m = r["metrics"]
         m["dsr"] = deflated_sharpe(m["sr_period"], srs, n_trials, m["n_obs"], m["skew"], m["kurtosis"])
         m["n_trials"] = float(n_trials)
+    if cfg.robustness:
+        _add_run_level_robustness(results)
     return str(uuid.uuid4()), results

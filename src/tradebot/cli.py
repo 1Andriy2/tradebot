@@ -159,9 +159,11 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
         m = r["metrics"]
         print(f"{r['family']:12s} {r['symbol']:15s} {r['timeframe']:4s} return={m['total_return']:+.3f} "
               f"sortino={m['sortino']:+.2f} dsr={m['dsr']:.2f} folds_won={m['fold_win_rate']:.2f} "
-              f"trades={int(m['num_trades'])} fees={m['fees_paid']:.0f} funding={m['funding_paid']:.0f}")
+              f"trades={int(m['num_trades'])} fees={m['fees_paid']:.0f} funding={m['funding_paid']:.0f} "
+              f"checks={int(m['checks_passed'])}/{int(m['checks_total'])}")
     stable = [p for p in patterns if p["stable"] and p["q_value"] < 0.1]
-    print(f"run {run_id}: {len(results)} results, {len(stable)} stable patterns")
+    robust = sum(r["metrics"]["robust"] == 1 for r in results)
+    print(f"run {run_id}: {len(results)} results, {robust} robust, {len(stable)} stable patterns")
     return 0
 
 
