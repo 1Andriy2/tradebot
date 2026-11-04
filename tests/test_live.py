@@ -7,7 +7,7 @@ import pytest
 from tradebot.agents import Agent
 from tradebot.config import Settings
 from tradebot.exchange.venue import Fill
-from tradebot.live.runner import Trader, seconds_until_next_bar
+from tradebot.live.runner import LOOKBACK_BARS, Trader, seconds_until_next_bar
 from tradebot.paper import PaperBook
 from tradebot.store import MemoryStore
 from tradebot.strategies.base import Strategy
@@ -190,6 +190,73 @@ def test_demo_failure_does_not_stop_other_agents() -> None:
     assert store.select("agent_state", {"agent_id": "other", "venue": "shadow"})
     assert store.select("bot_status")[0]["last_error"]
 
+
+
+class SeesBars(Const):
+    """Records how many candles it was given."""
+
+    def __init__(self, value: float, history_bars: int = 0) -> None:
+        super().__init__(value)
+        self.history_bars = history_bars
+        self.seen: list[int] = []
+
+    def generate(self, df: pd.DataFrame) -> pd.Series:
+        self.seen.append(len(df))
+        return super().generate(df)
+
+
+def long_history_trader(public: FakePublic) -> tuple[Trader, MemoryStore, SeesBars, SeesBars]:
+    settings = Settings()
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    store = MemoryStore()
+    usual, long = SeesBars(1.0), SeesBars(1.0, history_bars=2500)
+    agents = [Agent("ma_cross", "baseline", usual), Agent("long", "baseline", long)]
+    return Trader(settings, store, public, None, agents=agents), store, usual, long
+
+
+def test_only_agents_that_ask_get_a_longer_history() -> None:
+    public = FakePublic(n=3000)
+    trader, store, usual, long = long_history_trader(public)
+    report = trader.step()
+    assert not report.errors and report.decisions == 2
+    assert usual.seen[-1] <= LOOKBACK_BARS
+    assert long.seen[-1] >= 2499
+    assert store.select("agent_state", {"agent_id": "long", "venue": "shadow"})
+
+
+def test_long_history_is_fetched_once_per_symbol_per_step() -> None:
+    public = FakePublic(n=3000)
+    trader, _, _, _ = long_history_trader(public)
+    trader.agents.append(Agent("long2", "baseline", SeesBars(1.0, history_bars=2500)))
+    trader.policies["long2"] = trader.policy
+    calls: list[int] = []
+    original = public.fetch_ohlcv
+
+    def counting(symbol: str, tf: str, since: int, limit: int) -> list[list[float]]:
+        calls.append(since)
+        return original(symbol, tf, since, limit)
+
+    public.fetch_ohlcv = counting  # type: ignore[method-assign]
+    trader.step()
+    assert len({since for since in calls if since <= T0 + 501 * STEP_MS}) <= 3  # pages of one long fetch
+
+
+def test_failed_long_history_stops_only_that_agent() -> None:
+    public = FakePublic(n=3000)
+    trader, store, _, _ = long_history_trader(public)
+    original = public.fetch_ohlcv
+    first_since = int(public.milliseconds()) - LOOKBACK_BARS * STEP_MS
+
+    def flaky(symbol: str, tf: str, since: int, limit: int) -> list[list[float]]:
+        if since < first_since:
+            raise RuntimeError("history endpoint down")
+        return original(symbol, tf, since, limit)
+
+    public.fetch_ohlcv = flaky  # type: ignore[method-assign]
+    report = trader.step()
+    assert len(report.errors) == 1 and "long" in report.errors[0]
+    assert store.select("agent_state", {"agent_id": "ma_cross", "venue": "shadow"})
+    assert not store.select("agent_state", {"agent_id": "long", "venue": "shadow"})
 
 
 def test_manual_kill_switch_reset_reenables_trading() -> None:
