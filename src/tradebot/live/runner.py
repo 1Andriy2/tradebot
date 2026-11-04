@@ -201,7 +201,7 @@ class Trader:
         elif abs(ledger.units - units) > max(EPS, 0.01 * abs(units)):
             self._event("info", f"{symbol}: ledger resynced to exchange position",
                         {"ledger": ledger.units, "exchange": units}, agent.id)
-            ledger.units = units
+            ledger.adopt(ts, units, close)
 
         decision = policy.decide(state, ts.date(), sizing_equity, float(signal.iloc[-1]), close, units)
         orders = 0

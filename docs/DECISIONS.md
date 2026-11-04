@@ -61,3 +61,4 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — Tests: hypothesis property tests (equity = initial + trade PnL; exposure bounded by caps) and a golden regression file for every strategy family.
 - 2026-11-01 — GitHub `schedule` never fired in this repo (hours after enabling and re-registering). Workflows are now triggered by Supabase Cron (pg_cron + pg_net) calling workflow_dispatch; GitHub schedules and the keepalive workflow were removed.
 - 2026-11-01 — User-approved exception to "secrets only in .env / GitHub Secrets": a fine-grained GitHub token limited to Actions (read/write) on this repository lives in Supabase Vault (`github_dispatch_token`), added by the owner via the Dashboard; `dispatch_workflow()` is not executable by anon/authenticated.
+- 2026-11-04 — A new champion adopts positions it finds on the exchange at the current close (`PaperBook.adopt`), so it can close them and record the trade; the old champion's attached stops stay active.

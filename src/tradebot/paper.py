@@ -38,6 +38,19 @@ class PaperBook:
         if abs(qty) > EPS:
             self._execute(ts, qty, ref_price, reason, slippage)
 
+    def adopt(self, ts: pd.Timestamp, units: float, price: float) -> None:
+        """Match a position opened outside this book; its trade is measured from ``price``, fee-free."""
+        qty = units - self.units
+        self.cash -= qty * price
+        if self._open is None:
+            self._open = {"entry_time": ts, "side": "long" if units > 0 else "short",
+                          "entry_reason": "adopted", "cash_flow": 0.0, "fees": 0.0, "funding": 0.0,
+                          "max_units": 0.0, "entry_price": price}
+            self.avg_entry = price
+        self._open["cash_flow"] = float(self._open["cash_flow"]) - qty * price  # type: ignore[arg-type]
+        self._open["max_units"] = max(float(self._open["max_units"]), abs(units))  # type: ignore[arg-type]
+        self.units = units
+
     def apply_funding(self, rate: float, price: float) -> float:
         """Pay (rate > 0, long) or receive funding on the open position; returns the payment."""
         if abs(self.units) < EPS or rate == 0.0:
@@ -108,6 +121,8 @@ class PaperBook:
         if d.get("open"):
             book._open = dict(d["open"])
             book._open["entry_time"] = pd.Timestamp(str(book._open["entry_time"]))
+        else:  # units without a trade cannot be closed; the live resync re-adopts any real position
+            book.units = 0.0
         return book
 
 
