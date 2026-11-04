@@ -14,7 +14,7 @@ from tradebot.strategies.baselines import (
     MACrossover,
     RSIMeanReversion,
 )
-from tradebot.strategies.regimes import ChandelierTrend, RegimeSwitch, VolScaledTrend
+from tradebot.strategies.regimes import ChandelierTrend, OnTimeframe, RegimeSwitch, VolScaledTrend
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,8 @@ class Agent:
     risk: RiskParams | None = None  # None: use the configured default risk params
 
 
+CHANDELIER_4H_HISTORY = 6400  # 400 four-hour candles of 15m bars: live signals match full history
+
 BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "buy_hold": BuyHold,
     "ma_cross": MACrossover,
@@ -34,6 +36,7 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "regime_switch": RegimeSwitch,
     "vol_scaled_trend": VolScaledTrend,
     "chandelier_trend": ChandelierTrend,
+    "chandelier_trend_4h": lambda: OnTimeframe(ChandelierTrend(), "4h", CHANDELIER_4H_HISTORY),
 }
 
 DEFAULT_CHAMPION = "ma_cross"

@@ -17,6 +17,7 @@ import pandas as pd
 class Strategy(ABC):
     name: str = "strategy"
     uses_stops: bool = True  # False: ATR stop/take levels are not applied
+    history_bars: int = 0  # candles needed live, when more than the step's usual window
 
     def __init__(self, **params: Any) -> None:
         self.params = params

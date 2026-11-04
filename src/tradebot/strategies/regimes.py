@@ -15,6 +15,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from tradebot import indicators as ind
+from tradebot.ml.features import resample_ohlcv
 from tradebot.strategies.base import Strategy, hysteresis
 
 Bools = npt.NDArray[np.bool_]
@@ -126,3 +127,31 @@ class ChandelierTrend(Strategy):
             ind.atr(df, ATR_PERIOD).to_numpy(float), p["mult"], p["max_hold"],
         )
         return pd.Series(out, index=df.index)
+
+
+class OnTimeframe(Strategy):
+    """Runs a strategy on a higher timeframe inside the trade timeframe's step.
+
+    The inner strategy sees only completed higher-timeframe candles. A candle labelled t and
+    covering [t, t + rule) becomes visible on the last base bar inside it, and its signal holds
+    until the next one completes. Orders then fill at the next base bar's open, which is the
+    open of the next higher-timeframe candle, as in a backtest on that timeframe.
+
+    ``history_bars`` counts base bars. It must cover the inner strategy's warm-up on the higher
+    timeframe: on 15m candles, 1000 bars are only 63 four-hour candles.
+    """
+
+    def __init__(self, inner: Strategy, rule: str, history_bars: int = 0) -> None:
+        super().__init__(timeframe=rule, **inner.params)
+        self.inner = inner
+        self.rule = rule
+        self.name = f"{inner.name}_{rule}"
+        self.uses_stops = inner.uses_stops
+        self.history_bars = history_bars
+
+    def generate(self, df: pd.DataFrame) -> pd.Series:
+        base_bar = pd.Timedelta(pd.Series(df.index).diff().median())
+        higher = resample_ohlcv(df, self.rule)
+        signal = self.inner.signal(higher)
+        completed_at = pd.DatetimeIndex(signal.index) + (pd.Timedelta(self.rule) - base_bar)
+        return pd.Series(signal.to_numpy(), index=completed_at).reindex(df.index, method="ffill")

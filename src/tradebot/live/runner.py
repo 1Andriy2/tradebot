@@ -70,11 +70,13 @@ class Trader:
         self.tf = settings.markets.trade_timeframe
         self.slot_equity = settings.backtest.initial_equity / len(self.symbols)
         self.last_price: dict[str, float] = {}
+        self._long_history: dict[tuple[str, int], pd.DataFrame] = {}
 
     # ---------- public API ----------
 
     def step(self) -> StepReport:
         report = StepReport()
+        self._long_history.clear()
         self.store.upsert("agents", [
             {"id": a.id, "kind": a.kind, "label": a.strategy.label, "params": a.strategy.params}
             for a in self.agents
@@ -92,7 +94,7 @@ class Trader:
             # Each agent is isolated: one failing agent (or a demo-venue error) never stops the rest.
             for agent in self.agents:
                 try:
-                    signal = agent.strategy.signal(df)
+                    signal = self._signal(agent, symbol, df)
                     report.decisions += self._advance_shadow(agent, symbol, df, signal, atr)
                     if self.venue is not None and agent.id == champion:
                         report.orders += self._trade_demo(agent, symbol, df, signal, atr)
@@ -122,6 +124,18 @@ class Trader:
             for r in tail.itertuples()
         ], on_conflict="symbol,timeframe,ts")
         return df
+
+    def _signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
+        """The agent's signal on the step's bars, from a longer history if it needs one."""
+        need = agent.strategy.history_bars
+        if need <= LOOKBACK_BARS:
+            return agent.strategy.signal(df)
+        key = (symbol, need)
+        if key not in self._long_history:
+            step_ms = int(self.public.parse_timeframe(self.tf) * 1000)
+            since = int(self.public.milliseconds()) - need * step_ms
+            self._long_history[key] = fetch_ohlcv_range(self.public, symbol, self.tf, since)
+        return agent.strategy.signal(self._long_history[key]).reindex(df.index, method="ffill")
 
     # ---------- state ----------
 
