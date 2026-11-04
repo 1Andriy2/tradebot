@@ -1,4 +1,4 @@
-"""Mirror the local Parquet caches (candles, funding) to Supabase Storage.
+"""Mirror the local Parquet caches (candles, funding, market stats) to Supabase Storage.
 
 Lets CI and Kaggle start from the full history (and keep training even if the exchange's
 market-data API is unreachable from that network for a while).
@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tradebot.data.funding import funding_path
 from tradebot.data.history import cache_path
+from tradebot.data.market_stats import liquidations_path, stats_path
 from tradebot.store import Store
 
 log = logging.getLogger(__name__)
@@ -20,7 +21,9 @@ BUCKET = "data"
 
 def _paths(data_dir: Path, symbols: list[str], timeframes: list[str]) -> list[Path]:
     out = [cache_path(data_dir, s, tf) for s in symbols for tf in timeframes]
-    return out + [funding_path(data_dir, s) for s in symbols]
+    out += [funding_path(data_dir, s) for s in symbols]
+    out += [stats_path(data_dir, s) for s in symbols]
+    return out + [liquidations_path(data_dir, s) for s in symbols]
 
 
 def pull_cache(store: Store, data_dir: Path, symbols: list[str], timeframes: list[str]) -> int:

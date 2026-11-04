@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -39,6 +40,19 @@ def _download(settings: Settings) -> None:
             update_funding(client, settings.data_path, symbol, settings.markets.history_start)
         except Exception:  # funding is optional; candles are what training needs
             log.exception("funding update failed for %s", symbol)
+        if settings.venue.exchange_id == "okx":
+            _collect_market_data(client, settings.data_path, symbol)
+
+
+def _collect_market_data(client: Any, data_dir: Path, symbol: str) -> None:
+    """Nothing here is needed for training, so a failure never stops the job."""
+    from tradebot.data.market_stats import update_liquidations, update_stats
+
+    for update in (update_stats, update_liquidations):
+        try:
+            update(client, data_dir, symbol)
+        except Exception:
+            log.exception("%s failed for %s", update.__name__, symbol)
 
 
 def _prepare_data(settings: Settings, args: argparse.Namespace, store: Store | None) -> None:
@@ -138,6 +152,24 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _study_events(settings: Settings, now: pd.Timestamp) -> list[dict[str, Any]]:
+    """Tests of the liquidation idea on whatever has been collected so far."""
+    from tradebot.data.market_stats import hourly_liquidations, liquidations_path, stats_path
+    from tradebot.research.events import liquidation_studies
+
+    rows = []
+    for symbol in settings.markets.symbols:
+        liq_path = liquidations_path(settings.data_path, symbol)
+        stat_path = stats_path(settings.data_path, symbol)
+        liquidations = pd.read_parquet(liq_path) if liq_path.exists() else pd.DataFrame()
+        stats = pd.read_parquet(stat_path) if stat_path.exists() else pd.DataFrame()
+        close = load_cached(settings.data_path, symbol, "1h")["close"]
+        for study in liquidation_studies(close, hourly_liquidations(liquidations), stats):
+            rows.append({"ts": now, "type": "event_study", "message": f"{symbol} {study['test']}",
+                         "details": {"symbol": symbol, **study}})
+    return rows
+
+
 def _scenario_events(dfs: dict[str, pd.DataFrame], now: pd.Timestamp) -> list[dict[str, Any]]:
     """What followed the moments most like now, for each symbol and horizon."""
     from tradebot.research.lab import to_timeframe
@@ -173,7 +205,7 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     for s in settings.markets.symbols:
         patterns += scan_seasonality(load_cached(settings.data_path, s, "1h"), s)
     store.insert("patterns", [{"run_id": run_id, "created_at": now, **p} for p in patterns])
-    store.insert("events", _scenario_events(dfs, now))
+    store.insert("events", _scenario_events(dfs, now) + _study_events(settings, now))
     best = sorted(results, key=lambda r: r["metrics"]["dsr"], reverse=True)[:10]
     for r in best:
         m = r["metrics"]
