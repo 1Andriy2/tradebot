@@ -9,14 +9,24 @@ import { useRows } from "@/lib/useRows";
 const ALL = "__all__";
 const DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 
-type SortKey = "dsr" | "sortino" | "total_return" | "fold_win_rate" | "excess_vs_buy_hold";
+type SortKey = "checks_passed" | "dsr" | "sortino" | "total_return" | "fold_win_rate" | "excess_vs_buy_hold";
 const SORTS: { value: SortKey; label: string }[] = [
+  { value: "checks_passed", label: "Пройдені перевірки" },
   { value: "dsr", label: "Deflated Sharpe (надійність)" },
   { value: "fold_win_rate", label: "Стабільність по фолдах" },
   { value: "sortino", label: "Sortino" },
   { value: "total_return", label: "Дохідність" },
   { value: "excess_vs_buy_hold", label: "Краще за Buy & Hold" },
 ];
+
+/** Missing statistics stay visible as a dash: they mean "could not be computed", not zero. */
+function optNum(v: number | null | undefined, digits = 2): string {
+  return v == null ? "—" : fmtNum(v, digits);
+}
+
+function optPct(v: number | null | undefined): string {
+  return v == null ? "—" : fmtPct(v, 0);
+}
 
 function paramsText(p: Record<string, unknown> | undefined): string {
   if (!p || !Object.keys(p).length) return "—";
@@ -41,7 +51,7 @@ export default function ResearchPage() {
   const patterns = useRows<PatternRow>("patterns", { order: { column: "created_at" }, limit: 300, realtime: true });
   const [tf, setTf] = useState(ALL);
   const [symbol, setSymbol] = useState(ALL);
-  const [sort, setSort] = useState<SortKey>("dsr");
+  const [sort, setSort] = useState<SortKey>("checks_passed");
 
   const runId = results.rows[0]?.run_id;
   const latest = useMemo(() => results.rows.filter((r) => r.run_id === runId), [results.rows, runId]);
@@ -56,6 +66,7 @@ export default function ResearchPage() {
 
   const profitable = latest.filter((r) => r.metrics.total_return > 0).length;
   const reliable = latest.filter((r) => r.metrics.dsr >= 0.95).length;
+  const robust = latest.filter((r) => r.metrics.robust === 1).length;
   const uniq = (f: (r: ResearchRow) => string) => [...new Set(latest.map(f))].sort();
 
   return (
@@ -67,12 +78,18 @@ export default function ResearchPage() {
         перевіряються на наступних 3 (walk-forward). Комісії, проковзування та funding враховані.
         Deflated Sharpe ≥ 0.95 означає, що результат навряд чи випадковий з урахуванням кількості перевірених варіантів.
       </p>
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+      <p className="mb-4 text-sm text-slate-500">
+        «Стійка» стратегія прибуткова й пройшла всі доступні перевірки, яких має бути щонайменше чотири: DSR, значущість сигналу (q),
+        PBO (ризик, що переможець просто вгаданий), шляхи CPCV, сусідні параметри, інша пара, інші таймфрейми, Monte Carlo.
+        Прочерк означає, що показник порахувати не вдалося. Ці показники лише інформують і не змінюють, хто торгує.
+      </p>
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
         <Stat label="Останній прогін" value={fmtTime(latest[0]?.created_at)} />
         <Stat label="Комбінацій перевірено" value={latest.length}
           sub={latest[0] ? `${latest[0].metrics.n_trials} варіантів параметрів` : undefined} />
         <Stat label="Прибуткових (OOS)" value={`${profitable} / ${latest.length}`} />
         <Stat label="Надійних (DSR ≥ 0.95)" value={reliable} />
+        <Stat label="Стійких (усі перевірки)" value={robust} />
       </div>
 
       <Card title="Стратегії (найкращі параметри з кожного фолду, склеєні в один OOS-тест)" className="mb-4">
@@ -85,7 +102,8 @@ export default function ResearchPage() {
         </div>
         {rows.length ? (
           <Table head={["Стратегія", "Пара", "ТФ", "Дохідність", "vs B&H", "Sortino", "Макс. просід.", "Win rate", "PF", "Угод",
-            "Фолди +", "Фолди", "DSR", "Комісії", "Funding", "Останні параметри"]}>
+            "Фолди +", "Фолди", "DSR", "Перевірки", "Сигнал q", "PBO", "PBO всіх", "CPCV +", "Сусідні парам.", "MC збиток", "MC просід. ≥20%",
+            "Ulcer", "CVaR 5%", "Комісії", "Funding", "Останні параметри"]}>
             {rows.map((r) => {
               const m = r.metrics;
               return (
@@ -103,6 +121,18 @@ export default function ResearchPage() {
                   <td>{fmtPct(m.fold_win_rate, 0)}</td>
                   <td><FoldBars values={r.fold_returns ?? []} /></td>
                   <td className={m.dsr >= 0.95 ? "font-semibold text-emerald-600" : ""}>{fmtNum(m.dsr)}</td>
+                  <td className={m.robust === 1 ? "font-semibold text-emerald-600" : ""}>
+                    {m.checks_total == null ? "—" : `${m.checks_passed} / ${m.checks_total}`}
+                  </td>
+                  <td>{optNum(m.signal_q, 3)}</td>
+                  <td>{optNum(m.pbo)}</td>
+                  <td>{optNum(m.pbo_universe)}</td>
+                  <td>{optPct(m.cpcv_positive_paths)}</td>
+                  <td>{optPct(m.param_stability)}</td>
+                  <td>{optPct(m.mc_loss_prob)}</td>
+                  <td>{optPct(m.mc_ruin_prob)}</td>
+                  <td>{m.ulcer_index == null ? "—" : fmtPct(m.ulcer_index)}</td>
+                  <td>{m.cvar_5 == null ? "—" : fmtPct(m.cvar_5)}</td>
                   <td>{fmtNum(m.fees_paid, 0)}</td>
                   <td>{fmtNum(m.funding_paid, 0)}</td>
                   <td className="max-w-xs truncate text-xs text-slate-500">{paramsText(r.params.latest)}</td>
