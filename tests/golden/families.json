@@ -17,6 +17,12 @@
   "total_return": -0.02036491,
   "win_rate": 0.0
  },
+ "chandelier_trend": {
+  "max_drawdown": 0.01566389,
+  "num_trades": 32.0,
+  "total_return": 0.01240544,
+  "win_rate": 0.40625
+ },
  "donchian": {
   "max_drawdown": 0.04373212,
   "num_trades": 90.0,
@@ -47,6 +53,12 @@
   "total_return": -0.0673395,
   "win_rate": 0.29130435
  },
+ "regime_switch": {
+  "max_drawdown": 0.03313376,
+  "num_trades": 131.0,
+  "total_return": -0.01936373,
+  "win_rate": 0.39694656
+ },
  "rsi_mr": {
   "max_drawdown": 0.04525775,
   "num_trades": 58.0,
@@ -64,6 +76,12 @@
   "num_trades": 257.0,
   "total_return": -0.05611749,
   "win_rate": 0.25680934
+ },
+ "vol_scaled_trend": {
+  "max_drawdown": 0.04398175,
+  "num_trades": 109.0,
+  "total_return": -0.01741496,
+  "win_rate": 0.41284404
  },
  "zscore": {
   "max_drawdown": 0.03964863,

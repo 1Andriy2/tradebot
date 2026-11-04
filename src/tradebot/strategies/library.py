@@ -18,6 +18,7 @@ from tradebot.strategies.baselines import (
     MACrossover,
     RSIMeanReversion,
 )
+from tradebot.strategies.regimes import ChandelierTrend, RegimeSwitch, VolScaledTrend
 
 
 class DonchianBreakout(Strategy):
@@ -153,6 +154,12 @@ FAMILIES: dict[str, tuple[Callable[..., Strategy], ParamGrid]] = {
     "adx_trend": (ADXTrend, [{"fast": f, "slow": s, "adx_min": a}
                              for f, s in ((20, 100), (50, 200)) for a in (20.0, 30.0)]),
     "seasonality": (Seasonality, [{"t_min": t} for t in (2.0, 3.0)]),
+    "regime_switch": (RegimeSwitch, [{"adx_min": a, "lookback": n}
+                                     for a in (20.0, 25.0) for n in (100, 500)]),
+    "vol_scaled_trend": (VolScaledTrend, [{"fast": f, "slow": s, "lookback": n}
+                                          for f, s in ((20, 100), (50, 200)) for n in (100, 500)]),
+    "chandelier_trend": (ChandelierTrend, [{"mult": m, "max_hold": h}
+                                           for m in (2.5, 3.0) for h in (96, 288)]),
 }
 
 

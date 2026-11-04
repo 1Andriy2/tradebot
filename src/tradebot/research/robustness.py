@@ -214,6 +214,8 @@ def _valid(p: dict[str, Any]) -> bool:
         return False
     if "low" in p and "high" in p and not 0 < p["low"] < p["high"] < 100:
         return False
+    if p.get("vol_pct", 0) >= 1:
+        return False
     return not ("adx_min" in p and p["adx_min"] >= 100)
 
 

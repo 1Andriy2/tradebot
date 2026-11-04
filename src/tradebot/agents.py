@@ -14,6 +14,7 @@ from tradebot.strategies.baselines import (
     MACrossover,
     RSIMeanReversion,
 )
+from tradebot.strategies.regimes import ChandelierTrend, RegimeSwitch, VolScaledTrend
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,9 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "rsi_mr": RSIMeanReversion,
     "bb_breakout": BollingerBreakout,
     "grid": Grid,
+    "regime_switch": RegimeSwitch,
+    "vol_scaled_trend": VolScaledTrend,
+    "chandelier_trend": ChandelierTrend,
 }
 
 DEFAULT_CHAMPION = "ma_cross"
