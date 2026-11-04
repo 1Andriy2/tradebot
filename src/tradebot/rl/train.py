@@ -2,7 +2,7 @@
 
 The policy only ever sees data before the holdout. Locally/CI this runs with a small budget;
 the Kaggle notebook (notebooks/rl_kaggle.ipynb) runs the same code with a large budget on a
-free GPU and records the version through the same registry.
+free CPU session and records the version through the same registry.
 """
 
 from __future__ import annotations

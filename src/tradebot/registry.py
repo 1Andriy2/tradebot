@@ -109,12 +109,21 @@ def evaluate_champion(
     return cid, evaluate(dfs, {s: strat for s in dfs}, settings.risk, settings.costs, wf, start)
 
 
+def rejection_reasons(challenger: dict[str, Any], champion: dict[str, Any], min_trades: int) -> list[str]:
+    """Every promotion rule the challenger fails; empty means it may become the champion."""
+    reasons = []
+    if not challenger["score"] > champion["score"] + PROMOTION_MARGIN:
+        reasons.append(f"sortino {challenger['score']:.2f} not above champion "
+                       f"{champion['score']:.2f} + {PROMOTION_MARGIN}")
+    if not challenger["num_trades"] >= min_trades:
+        reasons.append(f"trades {challenger['num_trades']:.0f} below minimum {min_trades}")
+    if not challenger["max_drawdown"] < MAX_HOLDOUT_DD:
+        reasons.append(f"max drawdown {challenger['max_drawdown']:.1%} not below {MAX_HOLDOUT_DD:.0%}")
+    return reasons
+
+
 def is_better(challenger: dict[str, Any], champion: dict[str, Any], min_trades: int) -> bool:
-    return bool(
-        challenger["score"] > champion["score"] + PROMOTION_MARGIN
-        and challenger["num_trades"] >= min_trades
-        and challenger["max_drawdown"] < MAX_HOLDOUT_DD
-    )
+    return not rejection_reasons(challenger, champion, min_trades)
 
 
 def record_version(
@@ -123,7 +132,10 @@ def record_version(
     holdout: tuple[pd.Timestamp, pd.Timestamp], train_range: tuple[Any, Any], min_trades: int,
 ) -> bool:
     """Store a trained version, its holdout metrics and backtest rows; promote if better."""
-    promoted = is_better(challenger, champion, min_trades)
+    reasons = rejection_reasons(challenger, champion, min_trades)
+    promoted = not reasons
+    outcome = "promoted" if promoted else f"not promoted: {'; '.join(reasons)}"
+    log.info("%s v%d %s", agent_id, version, outcome)
     path = f"{agent_id}/v{version}.json"
     store.upload(BUCKET, path, blob)
     now = pd.Timestamp.now(tz="UTC")
@@ -153,8 +165,8 @@ def record_version(
     store.insert("events", [{
         "ts": now, "type": "retrain", "agent_id": agent_id,
         "message": (f"{label}: holdout Sortino {challenger['score']:.2f} vs champion {champ_id} "
-                    f"{champion['score']:.2f} -> {'promoted' if promoted else 'not promoted'}"),
-        "details": {"challenger": metrics,
+                    f"{champion['score']:.2f} -> {outcome}"),
+        "details": {"challenger": metrics, "rejection_reasons": reasons,
                     "champion": {k: champion[k] for k in ("score", "num_trades", "max_drawdown")}},
     }])
     if promoted:

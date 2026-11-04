@@ -6,7 +6,7 @@
  market data     │ retrain.yml nightly: LightGBM walk-forward + promotion     │    (api-demo.bybit.com,
                  │ rl-train.yml weekly: PPO (CPU, small budget)               │     allowlist-guarded)
                  └───────────────┬────────────────────────────────────────────┘
- Kaggle (free GPU) ─ rl_kaggle.ipynb ─┐  │ service-role key (server only)
+ Kaggle (free CPU) ─ rl_kaggle.ipynb ─┐  │ service-role key (server only)
                                       ▼  ▼
                          ┌────────── Supabase (free) ──────────┐
                          │ Postgres: agents, model_versions,   │
