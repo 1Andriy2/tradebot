@@ -41,6 +41,25 @@ interface ScenarioDetails {
   typical_best: number;
 }
 
+interface StudyDetails {
+  symbol: string;
+  test: string;
+  horizon_hours: number;
+  n: number;
+  mean_after?: number;
+  base_mean?: number;
+  q_value?: number;
+}
+
+const STUDY_LABELS: Record<string, string> = {
+  long_liquidation_spike: "Сплеск ліквідацій лонгів",
+  short_liquidation_spike: "Сплеск ліквідацій шортів",
+  open_interest_jump: "Стрибок open interest",
+  crowded_longs: "Перекіс у лонги",
+  good_news: "Хороші новини",
+  bad_news: "Погані новини",
+};
+
 function paramsText(p: Record<string, unknown> | undefined): string {
   if (!p || !Object.keys(p).length) return "—";
   return Object.entries(p).map(([k, v]) => `${k}=${v}`).join(", ");
@@ -63,6 +82,7 @@ export default function ResearchPage() {
   const results = useRows<ResearchRow>("research_results", { order: { column: "created_at" }, limit: 300, realtime: true });
   const patterns = useRows<PatternRow>("patterns", { order: { column: "created_at" }, limit: 300, realtime: true });
   const scenarios = useRows<EventRow>("events", { filters: { type: "scenario" }, order: { column: "ts" }, limit: 12 });
+  const studies = useRows<EventRow>("events", { filters: { type: "event_study" }, order: { column: "ts" }, limit: 40 });
   const [tf, setTf] = useState(ALL);
   const [symbol, setSymbol] = useState(ALL);
   const [sort, setSort] = useState<SortKey>("checks_passed");
@@ -81,6 +101,9 @@ export default function ResearchPage() {
   const scenarioTime = scenarios.rows[0]?.ts;
   const outlook = scenarios.rows.filter((e) => e.ts === scenarioTime);
 
+  const studyTime = studies.rows[0]?.ts;
+  const studyRows = studies.rows.filter((e) => e.ts === studyTime);
+
   const profitable = latest.filter((r) => r.metrics.total_return > 0).length;
   const reliable = latest.filter((r) => r.metrics.dsr >= 0.95).length;
   const robust = latest.filter((r) => r.metrics.robust === 1).length;
@@ -89,7 +112,7 @@ export default function ResearchPage() {
   return (
     <>
       <PageTitle>Дослідження стратегій і патернів</PageTitle>
-      <ErrorNote error={results.error ?? patterns.error ?? scenarios.error} />
+      <ErrorNote error={results.error ?? patterns.error ?? scenarios.error ?? studies.error} />
       <p className="mb-4 text-sm text-slate-500">
         Усе нижче — out-of-sample: параметри кожної стратегії обираються на попередніх 12 місяцях і
         перевіряються на наступних 3 (walk-forward). Комісії, проковзування та funding враховані.
@@ -186,6 +209,33 @@ export default function ResearchPage() {
             })}
           </Table>
         ) : <Empty>Сценарії зʼявляться після наступного нічного дослідження</Empty>}
+      </Card>
+
+      <Card title="Перевірка гіпотез: ліквідації, open interest, новини" className="mb-4">
+        <p className="mb-3 text-xs text-slate-500">
+          Чи рухається ціна інакше після таких подій, ніж зазвичай. Дані збираються від листопада 2026, тому спершу майже всюди буде
+          «мало даних»: тест починається від 30 окремих подій. Значущим вважається q &lt; 0.05. Торгівлю ці рядки не змінюють.
+        </p>
+        {studyRows.length ? (
+          <Table head={["Пара", "Подія", "Горизонт", "Подій", "Після події", "Зазвичай", "q"]}>
+            {studyRows.map((e) => {
+              const d = e.details as unknown as StudyDetails;
+              return (
+                <tr key={e.id}>
+                  <td>{d.symbol.replace(":USDT", "")}</td>
+                  <td>{STUDY_LABELS[d.test] ?? d.test}</td>
+                  <td>{d.horizon_hours} год</td>
+                  <td>{d.n}</td>
+                  <td className={d.mean_after == null ? "" : pnlClass(d.mean_after)}>
+                    {d.mean_after == null ? "мало даних" : fmtPct(d.mean_after, 2)}
+                  </td>
+                  <td>{d.base_mean == null ? "—" : fmtPct(d.base_mean, 2)}</td>
+                  <td className={d.q_value != null && d.q_value < 0.05 ? "font-semibold text-emerald-600" : ""}>{optNum(d.q_value, 3)}</td>
+                </tr>
+              );
+            })}
+          </Table>
+        ) : <Empty>Перші результати зʼявляться після наступного нічного дослідження</Empty>}
       </Card>
 
       <Card title="Повторювані патерни (година доби / день тижня, 1h-свічки)">
