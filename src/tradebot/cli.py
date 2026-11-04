@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import logging
 import sys
+from typing import Any
 
 import pandas as pd
 
@@ -19,6 +20,8 @@ from tradebot.store import MemoryStore, Store, SupabaseStore
 from tradebot.strategies.baselines import baseline_strategies
 
 log = logging.getLogger("tradebot")
+
+SCENARIO_HORIZONS = {"24h": 24, "3d": 72, "7d": 168}  # in 1h candles
 
 
 def _store(args: argparse.Namespace) -> Store:
@@ -135,6 +138,22 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _scenario_events(dfs: dict[str, pd.DataFrame], now: pd.Timestamp) -> list[dict[str, Any]]:
+    """What followed the moments most like now, for each symbol and horizon."""
+    from tradebot.research.lab import to_timeframe
+    from tradebot.strategies.analogs import scenario_outlook
+
+    rows = []
+    for symbol, df in dfs.items():
+        hourly = to_timeframe(df, "1h")
+        for label, bars in SCENARIO_HORIZONS.items():
+            out = scenario_outlook(hourly, bars)
+            if out is not None:
+                rows.append({"ts": now, "type": "scenario", "message": f"{symbol} {label}",
+                             "details": {"symbol": symbol, "horizon": label, **out}})
+    return rows
+
+
 def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     from tradebot.data.funding import load_funding
     from tradebot.research.lab import ResearchConfig, run_research
@@ -154,6 +173,7 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     for s in settings.markets.symbols:
         patterns += scan_seasonality(load_cached(settings.data_path, s, "1h"), s)
     store.insert("patterns", [{"run_id": run_id, "created_at": now, **p} for p in patterns])
+    store.insert("events", _scenario_events(dfs, now))
     best = sorted(results, key=lambda r: r["metrics"]["dsr"], reverse=True)[:10]
     for r in best:
         m = r["metrics"]

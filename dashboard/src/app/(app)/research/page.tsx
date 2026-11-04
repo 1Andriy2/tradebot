@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Card, Empty, ErrorNote, PageTitle, Select, Stat, Table } from "@/components/ui";
 import { fmtNum, fmtPct, fmtTime, pnlClass } from "@/lib/format";
-import type { PatternRow, ResearchRow } from "@/lib/types";
+import type { EventRow, PatternRow, ResearchRow } from "@/lib/types";
 import { useRows } from "@/lib/useRows";
 
 const ALL = "__all__";
@@ -28,6 +28,19 @@ function optPct(v: number | null | undefined): string {
   return v == null ? "—" : fmtPct(v, 0);
 }
 
+interface ScenarioDetails {
+  symbol: string;
+  horizon: string;
+  n: number;
+  p_up: number;
+  base_p_up: number;
+  q10: number;
+  q50: number;
+  q90: number;
+  typical_worst: number;
+  typical_best: number;
+}
+
 function paramsText(p: Record<string, unknown> | undefined): string {
   if (!p || !Object.keys(p).length) return "—";
   return Object.entries(p).map(([k, v]) => `${k}=${v}`).join(", ");
@@ -49,6 +62,7 @@ function FoldBars({ values }: { values: number[] }) {
 export default function ResearchPage() {
   const results = useRows<ResearchRow>("research_results", { order: { column: "created_at" }, limit: 300, realtime: true });
   const patterns = useRows<PatternRow>("patterns", { order: { column: "created_at" }, limit: 300, realtime: true });
+  const scenarios = useRows<EventRow>("events", { filters: { type: "scenario" }, order: { column: "ts" }, limit: 12 });
   const [tf, setTf] = useState(ALL);
   const [symbol, setSymbol] = useState(ALL);
   const [sort, setSort] = useState<SortKey>("checks_passed");
@@ -64,6 +78,9 @@ export default function ResearchPage() {
     .filter((p) => p.run_id === patRun && p.q_value < 0.2)
     .sort((a, b) => Number(b.stable) - Number(a.stable) || a.q_value - b.q_value);
 
+  const scenarioTime = scenarios.rows[0]?.ts;
+  const outlook = scenarios.rows.filter((e) => e.ts === scenarioTime);
+
   const profitable = latest.filter((r) => r.metrics.total_return > 0).length;
   const reliable = latest.filter((r) => r.metrics.dsr >= 0.95).length;
   const robust = latest.filter((r) => r.metrics.robust === 1).length;
@@ -72,7 +89,7 @@ export default function ResearchPage() {
   return (
     <>
       <PageTitle>Дослідження стратегій і патернів</PageTitle>
-      <ErrorNote error={results.error ?? patterns.error} />
+      <ErrorNote error={results.error ?? patterns.error ?? scenarios.error} />
       <p className="mb-4 text-sm text-slate-500">
         Усе нижче — out-of-sample: параметри кожної стратегії обираються на попередніх 12 місяцях і
         перевіряються на наступних 3 (walk-forward). Комісії, проковзування та funding враховані.
@@ -141,6 +158,34 @@ export default function ResearchPage() {
             })}
           </Table>
         ) : <Empty>Дослідження ще не запускалось</Empty>}
+      </Card>
+
+      <Card title="Сценарії: що було після схожих моментів в історії" className="mb-4">
+        <p className="mb-3 text-xs text-slate-500">
+          Це опис минулого, а не прогноз. Чи має він прогнозну силу, показує рядок стратегії analog у таблиці вище.
+          Порівнюйте «Частка росту» з базовою: якщо вони майже однакові, поточний стан нічого не додає.
+        </p>
+        {outlook.length ? (
+          <Table head={["Пара", "Горизонт", "Схожих моментів", "Частка росту", "Базова", "Погані 10%", "Медіана", "Добрі 10%", "Типове падіння", "Типовий ріст"]}>
+            {outlook.map((e) => {
+              const d = e.details as unknown as ScenarioDetails;
+              return (
+                <tr key={e.id}>
+                  <td>{d.symbol.replace(":USDT", "")}</td>
+                  <td>{d.horizon}</td>
+                  <td>{d.n}</td>
+                  <td>{fmtPct(d.p_up, 0)}</td>
+                  <td>{fmtPct(d.base_p_up, 0)}</td>
+                  <td className={pnlClass(d.q10)}>{fmtPct(d.q10, 1)}</td>
+                  <td className={pnlClass(d.q50)}>{fmtPct(d.q50, 1)}</td>
+                  <td className={pnlClass(d.q90)}>{fmtPct(d.q90, 1)}</td>
+                  <td className={pnlClass(d.typical_worst)}>{fmtPct(d.typical_worst, 1)}</td>
+                  <td className={pnlClass(d.typical_best)}>{fmtPct(d.typical_best, 1)}</td>
+                </tr>
+              );
+            })}
+          </Table>
+        ) : <Empty>Сценарії зʼявляться після наступного нічного дослідження</Empty>}
       </Card>
 
       <Card title="Повторювані патерни (година доби / день тижня, 1h-свічки)">
