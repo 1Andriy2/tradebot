@@ -8,6 +8,7 @@ from tradebot.agents import Agent
 from tradebot.config import Settings
 from tradebot.exchange.venue import Fill
 from tradebot.live.runner import Trader, seconds_until_next_bar
+from tradebot.paper import PaperBook
 from tradebot.store import MemoryStore
 from tradebot.strategies.base import Strategy
 
@@ -122,6 +123,27 @@ def test_exchange_stop_is_recorded_and_not_reentered() -> None:
     trades = store.select("trades", {"venue": "demo"})
     assert len(trades) == 1 and trades[0]["exit_reason"] == "stop_loss"
     assert len(venue.orders) == 1  # unchanged signal does not re-enter after a stop
+
+
+def test_inherited_position_closed_on_exchange_is_recorded() -> None:
+    """A new champion takes over the old champion's position; its old stop then fires."""
+    public, venue = FakePublic(), FakeVenue()
+    trader, store = make_trader(venue, public)
+    venue.units["BTC/USDT:USDT"] = 0.5
+    trader.step()
+    venue.units["BTC/USDT:USDT"] = 0.0
+    public.add_bar(90.0)
+    report = trader.step()
+    assert report.errors == []
+    trades = store.select("trades", {"venue": "demo"})
+    assert len(trades) == 1 and trades[0]["entry_reason"] == "adopted"
+    assert float(trades[0]["pnl"]) < 0  # price fell while long, measured from the adoption price
+
+
+def test_stored_book_with_units_but_no_open_trade_starts_flat() -> None:
+    book = PaperBook.from_dict({"cash": 100.0, "units": 0.5, "avg_entry": 0.0, "open": None},
+                               Settings().costs)
+    assert book.units == 0.0
 
 
 def test_kill_switch_closes_demo_position() -> None:
