@@ -35,7 +35,8 @@ COINS = {"btc": re.compile(r"\b(bitcoin|btc)\b", re.I), "eth": re.compile(r"\b(e
 POSITIVE = re.compile(r"\b(approv\w*|adopt\w*|inflows?|rall\w+|surg\w+|soar\w*|record high|upgrade\w*|"
                       r"partnership\w*|rebounds?|gains?)\b", re.I)
 NEGATIVE = re.compile(r"\b(hack\w*|exploit\w*|bans?|banned|banning|lawsuits?|sues?|sued|crash\w*|"
-                      r"outflows?|bankrupt\w*|plung\w+|fraud\w*|liquidat\w+|sell-?off\w*|drops?|falls?)\b", re.I)
+                      r"outflows?|bankrupt\w*|plung\w+|fraud\w*|liquidat\w+|sell-?off\w*|"
+                      r"drops?|falls?)\b", re.I)
 
 
 def news_path(data_dir: Path) -> Path:
