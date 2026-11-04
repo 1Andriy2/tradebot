@@ -15,7 +15,7 @@
 | Торговий крок кожні 15 хв | GitHub Actions (`trade.yml`) | бере свіжі свічки, приймає рішення, ставить ордери на демо-рахунку OKX |
 | Нічне перенавчання | GitHub Actions (`retrain.yml`) | LightGBM + walk-forward + champion/challenger |
 | Нічне дослідження | GitHub Actions (`research.yml`) | 12 сімейств стратегій × 3 таймфрейми × 2 пари walk-forward + пошук повторюваних патернів |
-| RL-агент | GitHub Actions (щотижня, CPU) або Kaggle (GPU) | PPO вчиться торгувати в симуляторі |
+| RL-агент | GitHub Actions (щотижня) або Kaggle (великий бюджет), обидва на CPU | PPO вчиться торгувати в симуляторі |
 | База даних і файли моделей | Supabase (безкоштовно) | угоди, рішення, метрики, версії моделей |
 | Дашборд | Vercel Hobby (безкоштовно) | графіки й таблиці українською, вхід за паролем |
 
@@ -100,13 +100,13 @@
    - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: **publishable / anon** ключ (не service_role!).
 4. **Deploy**. Відкрийте адресу сайту й увійдіть користувачем із кроку 2.
 
-### Крок 5 (необов'язково). Kaggle: навчання RL на GPU
+### Крок 5 (необов'язково). Kaggle: велике навчання RL
 
-1. Зареєструйтесь на [kaggle.com](https://www.kaggle.com) і підтвердіть телефон (без цього немає GPU та інтернету).
+1. Зареєструйтесь на [kaggle.com](https://www.kaggle.com) і підтвердіть телефон (без цього немає інтернету в ноутбуці).
 2. **Create → New Notebook → File → Import Notebook** → завантажте `notebooks/rl_kaggle.ipynb`.
-3. У налаштуваннях ноутбука: **Accelerator** = GPU, **Internet** = On.
+3. У налаштуваннях ноутбука: **Accelerator** = None, **Internet** = On. GPU не потрібен: середовище з `uv.lock` використовує CPU-збірку torch.
 4. **Add-ons → Secrets**: додайте `SUPABASE_URL` і `SUPABASE_SERVICE_ROLE_KEY`.
-5. Впишіть адресу свого репозиторію в `REPO_URL` → **Run All**.
+5. **Run All**. Ноутбук сам клонує репозиторій і збирає середовище на Python 3.11.
 
 ---
 

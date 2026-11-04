@@ -36,6 +36,7 @@ One line per decision. Newest at the bottom.
 - 2026-11-01 — Shared `registry` module handles versions, champion/challenger and model storage for both LightGBM and RL.
 - 2026-11-01 — Candle cache mirrored to Supabase Storage (`data` bucket, `--sync`) so CI/Kaggle training works even if the exchange API is unreachable there.
 - 2026-11-01 — Kaggle notebook installs the package from the public repo and calls `tradebot rl-train --sync --no-download` (secrets via Kaggle Secrets).
+- 2026-11-04 — Kaggle notebook clones the repo and runs `uv sync --frozen` on Python 3.11: Kaggle's Python 3.13 fails `requires-python`. The lock pins CPU torch on Linux, so Kaggle runs on CPU.
 - 2026-11-01 — macOS dev only: `OMP_NUM_THREADS=1` (torch + LightGBM OpenMP clash); Linux runs multi-threaded.
 - 2026-11-01 — Workflows: CI (ruff, mypy, pytest, dashboard lint/build), trade step at minute 1/16/31/46, nightly retrain 02:17 UTC + prune, weekly CPU RL, monthly keepalive commit, manual venue reachability check.
 - 2026-11-01 — Workflow inputs are passed via env (no `${{ }}` interpolation in shell) to avoid script injection.
