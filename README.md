@@ -91,6 +91,13 @@
      **Actions: Read and write** (більше нічого).
    - Supabase Dashboard → **Integrations → Vault** (або пошук «Vault») → **Add new secret**:
      name `github_dispatch_token`, value — цей токен. У `.env` його класти не потрібно.
+7. **Фільтр новин (необов'язково).** Він збирає новини й оцінює ризик, але на торгівлю поки не впливає.
+   - Створіть безкоштовні ключі: [Google AI Studio](https://aistudio.google.com/apikey) і
+     [Groq](https://console.groq.com/keys). Картка не потрібна.
+   - Додайте їх у GitHub Secrets як `GEMINI_API_KEY` і `GROQ_API_KEY`. Вистачить і одного: другий
+     потрібен на випадок збою першого.
+   - Вкладка **Actions** → **News source check** → **Run workflow** покаже, які джерела доступні з GitHub.
+   - Застосуйте міграцію `supabase/migrations/20261105120000_news_cron.sql`, щоб увімкнути запуск кожні 15 хв.
 
 ### Крок 4. Vercel: дашборд
 
@@ -157,6 +164,7 @@ docker compose logs -f trader
 | `retrain [--sync]` | нічне перенавчання LightGBM з champion/challenger |
 | `rl-train [--timesteps N] [--device cuda]` | навчання RL-агента з champion/challenger |
 | `research [--families ...] [--workers N]` | дослідження всіх стратегій і патернів (результати — на сторінці «Дослідження») |
+| `news [--check] [--memory-store]` | збирає новини, оцінює їх через LLM і рахує рівень ризику; `--check` лише показує, які джерела відповідають |
 | `maintenance` | видаляє старі записи, щоб не вийти за межі безкоштовного тарифу Supabase |
 | `reset-kill-switch --agent A --venue demo --symbol S --equity E` | ручне скидання kill switch (рішення людини) |
 

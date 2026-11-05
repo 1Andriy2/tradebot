@@ -24,4 +24,12 @@ risk:
   take_atr_mult: 6.0
   atr_period: 14
 
+# News risk filter. API keys come from GEMINI_API_KEY and GROQ_API_KEY, never from this file.
+news:
+  gemini_model: "gemini-3.5-flash-lite"
+  groq_model: "openai/gpt-oss-120b"
+  max_items_per_run: 40
+  max_items_per_day: 500
+  telegram_channels: ["WatcherGuru", "bbcbreaking"]
+
 data_dir: "data"

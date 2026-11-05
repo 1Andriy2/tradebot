@@ -229,6 +229,35 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
+    """Collect and score news into a risk level. Trading does not read it yet."""
+    from tradebot.news.filters import relevant
+    from tradebot.news.pipeline import run
+    from tradebot.news.scoring import providers_from_env
+    from tradebot.news.sources import all_sources, collect
+
+    now = pd.Timestamp.now(tz="UTC")
+    sources = all_sources(settings.news.telegram_channels)
+    if args.check:  # no model, no writes: shows what this network can reach
+        items, counts = collect(sources, now)
+        for name, count in counts.items():
+            print(f"{name:28s} {'FAILED' if count < 0 else count}")
+        print(f"{sum(n >= 0 for n in counts.values())}/{len(counts)} sources, {len(items)} items, "
+              f"{sum(relevant(i) for i in items)} relevant")
+        return 0
+    providers = providers_from_env(settings.news)
+    if not providers:
+        log.warning("no GEMINI_API_KEY or GROQ_API_KEY: collecting without scoring")
+    report = run(settings.data_path, _store(args), sources, providers, settings.news, now)
+    failed = [name for name, count in report.counts.items() if count < 0]
+    print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
+          f"pending={report.pending} failed={failed}")
+    for row in report.risk:
+        print(f"{row['scope']:7s} {row['level']:12s} long x{row['long_mult']} short x{row['short_mult']} "
+              f"bad={row['negative']:.2f} good={row['positive']:.2f} events={row['events']}")
+    return 0 if report.sources_ok else 1
+
+
 def cmd_reset_kill_switch(settings: Settings, args: argparse.Namespace) -> int:
     """Manual (human) reset of a tripped kill switch for one agent/venue/symbol."""
     from tradebot.policy import PolicyState
@@ -286,6 +315,9 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--workers", type=int, default=4)
     rs.add_argument("--families", nargs="*", help="subset of strategy families")
     _data_flags(rs)
+    nw = sub.add_parser("news", help="collect and score news into a risk level (does not affect trading)")
+    nw.add_argument("--check", action="store_true", help="only show which sources respond")
+    nw.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     ks = sub.add_parser("reset-kill-switch", help="manually reset a tripped kill switch (human decision)")
     ks.add_argument("--agent", required=True)
     ks.add_argument("--venue", choices=["demo", "shadow"], required=True)
@@ -297,7 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = {"download": cmd_download, "backtest": cmd_backtest, "step": cmd_step, "daemon": cmd_daemon,
             "retrain": cmd_retrain, "rl-train": cmd_rl_train, "maintenance": cmd_maintenance,
-            "reset-kill-switch": cmd_reset_kill_switch, "research": cmd_research}
+            "reset-kill-switch": cmd_reset_kill_switch, "research": cmd_research, "news": cmd_news}
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -67,15 +67,15 @@ def parse_feed(content: bytes, source: str, seen_at: pd.Timestamp) -> list[dict[
     return rows
 
 
-def fetch_feed(url: str) -> bytes:
+def fetch_feed(url: str, limit: int = MAX_FEED_BYTES) -> bytes:
     with httpx.stream("GET", url, timeout=20, follow_redirects=True,
                       headers={"User-Agent": "tradebot-research/1.0"}) as response:
         response.raise_for_status()
         chunks, size = [], 0
         for chunk in response.iter_bytes():
             size += len(chunk)
-            if size > MAX_FEED_BYTES:
-                raise ValueError(f"feed larger than {MAX_FEED_BYTES} bytes: {url}")
+            if size > limit:
+                raise ValueError(f"feed larger than {limit} bytes: {url}")
             chunks.append(chunk)
     return b"".join(chunks)
 
