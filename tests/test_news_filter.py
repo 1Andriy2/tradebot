@@ -251,6 +251,9 @@ def test_company_suffixes_are_dropped_from_the_search_name() -> None:
     ("Apple Inc.", "Apple"), ("AT&T INC.", "AT&T"), ("JPMORGAN CHASE & CO", "JPMORGAN CHASE"),
     ("BANK OF AMERICA CORP /DE/", "BANK OF AMERICA"), ("WELLS FARGO & COMPANY/MN", "WELLS FARGO"),
     ("AMAZON COM INC", "AMAZON"), ("MCDONALDS CORP", "MCDONALDS"), ("JPMorgan Chase & Co.", "JPMorgan Chase"),
+    ("The Boeing Company", "Boeing"), ("Amazon.com, Inc.", "Amazon"),
+    ("Mastercard Incorporated", "Mastercard"),
+    ("Alibaba Group Holding Limited", "Alibaba Group Holding"), ("McDonald's Corporation", "McDonald's"),
 ])
 def test_real_company_titles_become_names_used_in_headlines(raw: str, expected: str) -> None:
     assert sources.search_name({"kind": "stock", "name": raw}) == expected
@@ -272,6 +275,8 @@ def test_a_headline_must_name_the_asset() -> None:
     assert not filters.mentions("Link to the full report", "Chainlink", "LINK")
     assert not filters.mentions("Sol Campbell joins club", "Solana", "SOL")
     assert filters.mentions("McDonald's sales fall", "MCDONALDS", "MCD")
+    assert filters.mentions("McDonald's sales fall", "McDonald's", "MCD")
+    assert filters.mentions("McDonalds: 8-K report", "McDonald's", "MCD")
     assert filters.mentions("Bank of America raises dividend", "BANK OF AMERICA", "BAC")
 
 
@@ -335,12 +340,54 @@ def test_a_followed_story_never_reaches_the_risk_level() -> None:
     assert all(r["events"] == 0 and r["level"] == risk.TRADE for r in report.risk)
 
 
-def test_a_story_with_a_general_source_counts_whoever_follows_it() -> None:
+def levels_with(items: list[dict[str, Any]], provider: scoring.Provider) -> list[dict[str, Any]]:
+    """Risk levels without the time stamp, to compare runs."""
+    _, report = run_watched(items, provider)
+    return [{k: v for k, v in r.items() if k != "ts"} for r in report.risk]
+
+
+def test_following_an_asset_changes_nothing_in_the_general_stream() -> None:
+    """The experiment must not depend on what the user follows, whatever the overlap."""
     general = news_item("SEC sues Binance over securities", "https://a.example/1")
-    followed = {**watched_item("SEC sues Binance over securities today", "https://b.example/1")}
-    frame, report = run_watched([followed, general], answering(-0.9, ("BTC",)))
-    assert frame.set_index("url").loc["https://a.example/1", "status"] == pipeline.SCORED
-    assert report.risk[0]["events"] >= 1
+    same_link = {**watched_item("Solana hit as SEC sues Binance", general["url"])}
+    same_words = watched_item("SEC sues Binance over securities today", "https://b.example/1")
+    alone = levels_with([general], answering(-0.9, ("BTC",)))
+    for extra in (same_link, same_words):
+        assert levels_with([extra, general], answering(-0.9, ("BTC",))) == alone
+
+
+def test_an_off_topic_followed_item_does_not_swallow_a_general_repeat() -> None:
+    def off_for_followed(system: str, user: str) -> str:
+        return json.dumps({"results": [{**answer(id=r["id"], impact=-0.9, confidence=0.9, assets=["BTC"]),
+                                        "about_asset": "asset" not in r} for r in json.loads(user)]})
+
+    followed = watched_item("Senate Democrats block crypto market bill")
+    frame, _ = run_watched([followed], scoring.Provider("m", off_for_followed))
+    repeat = news_item("Senate Democrats block crypto market bill again", "https://a.example/1")
+    again, report = run_watched([repeat], scoring.Provider("m", off_for_followed), frame)
+    assert again.iloc[1]["status"] == pipeline.SCORED and report.risk[0]["events"] == 1
+
+
+def test_one_link_reaches_every_asset_that_follows_it() -> None:
+    first = watched_item("Apple and Solana partner", "https://x.example/shared")
+    second = {**first, "watch": "stock:AAPL", "ticker": "AAPL"}
+    frame, report = run_watched([first, second], answering(),
+                                watched={"crypto:solana": "Solana", "stock:AAPL": "Apple"})
+    assert report.scored == 2
+    assert {r["assets"].split(",")[0] for r in pipeline.page_rows(frame)} == {"SOL", "AAPL"}
+
+
+def test_each_followed_item_is_checked_against_its_own_asset() -> None:
+    seen: list[str] = []
+
+    def complete(system: str, user: str) -> str:
+        seen.append(user)
+        return '{"results": []}'
+
+    general = news_item("Senate Democrats block crypto bill", "https://a.example/1")
+    followed = watched_item("Senate Democrats block crypto bill now")
+    run_watched([general, followed], scoring.Provider("m", complete))
+    assert sum("asset" in row for row in json.loads(seen[0])) == 1
 
 
 def test_the_model_is_told_which_asset_to_check() -> None:

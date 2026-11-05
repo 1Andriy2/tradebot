@@ -88,8 +88,8 @@ def typed(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def story_id(url: str) -> str:
-    return hashlib.sha256(url.encode()).hexdigest()[:16]
+def story_id(url: str, lane: str = "") -> str:
+    return hashlib.sha256(f"{lane}{url}".encode()).hexdigest()[:16]
 
 
 def first_status(item: Item, now: pd.Timestamp) -> str:
@@ -101,28 +101,36 @@ def first_status(item: Item, now: pd.Timestamp) -> str:
 
 
 def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.DataFrame:
-    """New items only, each with a status. A repeat of a recent story joins that story's cluster."""
-    seen = set(known["url"])
+    """New items only, each with a status. A repeat of a recent story joins that story's cluster.
+
+    The general stream and each followed asset are separate lanes that share nothing, not even a
+    link. So following an asset cannot change what the general stream, and with it the risk filter,
+    sees. The price is that a story in two lanes is rated twice.
+    """
+    seen = set(zip(known["watch"], known["url"], strict=True))
     recent = known[(known["first_seen"] > now - SAME_STORY_WINDOW)
                    & known["status"].isin([PENDING, SCORED, EXPIRED, OFF_TOPIC])]
-    stories = [(words(t), c) for t, c in zip(recent["title"], recent["cluster"], strict=True)]
+    stories: dict[str, list[tuple[frozenset[str], str]]] = {}
+    for lane, title, story in zip(recent["watch"], recent["title"], recent["cluster"], strict=True):
+        stories.setdefault(lane, []).append((words(title), story))
     rows = []
     geo_left = GEO_STORIES_PER_RUN
     for item in items:
-        if item["url"] in seen:
+        lane = item.get("watch", "")
+        if (lane, item["url"]) in seen:
             continue
-        seen.add(item["url"])
-        status, cluster = first_status(item, now), story_id(item["url"])
+        seen.add((lane, item["url"]))
+        status, cluster = first_status(item, now), story_id(item["url"], lane)
         if status == PENDING:
             tokens = words(item["title"])
             # Market items and filings share a template, so their words say nothing.
             templated = item["kind"] == "market" or item["source"] == "sec_8k"
             match = None if templated else next(
-                (c for other, c in stories if same_story(tokens, other)), None)
+                (c for other, c in stories.get(lane, []) if same_story(tokens, other)), None)
             if match is not None:
                 status, cluster = DUPLICATE, match
             elif item["kind"] != "geo" or geo_left > 0:
-                stories.append((tokens, cluster))
+                stories.setdefault(lane, []).append((tokens, cluster))
                 geo_left -= item["kind"] == "geo"
             else:
                 status = IGNORED
@@ -138,9 +146,7 @@ def choose_heads(frame: pd.DataFrame) -> None:
                     & ~frame["cluster"].isin(rated)]
     if waiting.empty:
         return
-    # A followed item goes last here, so a story with a general source stays in the risk level.
-    ranks = {**PRIORITY, "watch": 9}
-    ranked = waiting.assign(rank=waiting["kind"].map(ranks).fillna(9)).sort_values(
+    ranked = waiting.assign(rank=waiting["kind"].map(PRIORITY).fillna(9)).sort_values(
         ["rank", "first_seen"], kind="stable")
     heads = ranked.drop_duplicates("cluster").index
     frame.loc[waiting.index, "status"] = DUPLICATE

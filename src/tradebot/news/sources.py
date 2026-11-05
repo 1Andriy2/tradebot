@@ -61,8 +61,8 @@ PRICE_MARKET = re.compile(r"\b(price|above|below|up or down|hit \$|reach \$)", r
 GOOGLE_NEWS = "https://news.google.com/rss/search"
 YAHOO_NEWS = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 SEC_COMPANY = "https://www.sec.gov/cgi-bin/browse-edgar"
-COMPANY_WORDS = "inc|corp|corporation|co|com|company|ltd|plc|holdings|group|class [a-z]"
-COMPANY_SUFFIX = re.compile(rf"[\s,&]+(?:{COMPANY_WORDS})\.?$|\s*/[a-z]{{2}}/?$|[\s,&/]+$", re.I)
+COMPANY_WORDS = "inc|incorporated|corp|corporation|co|com|company|ltd|limited|plc|holdings|group|class [a-z]"
+COMPANY_SUFFIX = re.compile(rf"[\s,&]+(?:{COMPANY_WORDS})\.?$|\.com$|\s*/[a-z]{{2}}/?$|[\s,&/]+$", re.I)
 
 TAG = re.compile(r"<[^>]+>")
 INVISIBLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​-‏‪-‮⁠-⁩﻿]")
@@ -181,7 +181,7 @@ def parse_telegram(content: bytes, channel: str, seen_at: pd.Timestamp) -> list[
 
 
 def search_name(asset: Item) -> str:
-    """The name news uses: 'WELLS FARGO & COMPANY/MN' is written 'WELLS FARGO'. Measured on one day
+    """The name news uses: 'The Boeing Company' is written 'Boeing'. Measured on one day
     of Google News, a ticker alone found 0 to 44% relevant headlines for SOL, NEAR, LINK and T; the
     name found 41 to 98%. Only stocks are trimmed, since a coin's name is already the plain one."""
     name = str(asset["name"]).strip()
@@ -189,7 +189,7 @@ def search_name(asset: Item) -> str:
         return name
     while (shorter := COMPANY_SUFFIX.sub("", name)) != name and shorter:
         name = shorter
-    return name
+    return re.sub(r"^the\s+", "", name, flags=re.I)
 
 
 def _for_asset(rows: list[Item], asset: Item) -> list[Item]:
