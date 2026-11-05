@@ -44,12 +44,23 @@ class RiskParams(BaseModel):
     atr_period: int = Field(14, ge=2)
 
 
+class NewsConfig(BaseModel):
+    """Free LLM models and limits for the news risk filter (see tradebot.news)."""
+
+    gemini_model: str = "gemini-3.5-flash-lite"
+    groq_model: str = "openai/gpt-oss-120b"
+    max_items_per_run: int = Field(40, gt=0)
+    max_items_per_day: int = Field(500, gt=0)
+    telegram_channels: list[str] = Field(default_factory=lambda: ["WatcherGuru", "bbcbreaking"])
+
+
 class Settings(BaseModel):
     venue: VenueConfig = VenueConfig()
     markets: MarketsConfig = MarketsConfig()
     costs: CostsConfig = CostsConfig()
     backtest: BacktestConfig = BacktestConfig()
     risk: RiskParams = RiskParams()
+    news: NewsConfig = NewsConfig()
     data_dir: str = "data"
 
     @property

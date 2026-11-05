@@ -41,6 +41,7 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
 | `rl/` | Gymnasium env, PPO training, `RLStrategy`. |
 | `registry.py` | Model versions, champion/challenger promotion, model storage. |
 | `store.py` | Supabase store (service role) and in-memory store for tests. |
+| `news/` | News risk filter: `sources`, `filters`, `scoring`, `risk`, `pipeline`. Trading does not read it yet. |
 
 ## Learning loop
 
@@ -51,6 +52,23 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
 4. **Champion/challenger** — a version replaces the champion only if its holdout Sortino beats the
    champion's by 0.05 with ≥ 30 trades and < 20% drawdown.
 5. **Nightly retraining** — `retrain.yml`; every version is stored with params and metrics.
+
+## News risk filter
+
+`news.yml` runs every 15 minutes and has no exchange keys, because it reads untrusted text.
+
+1. **Collect** — 21 free sources: crypto RSS, Fed, SEC, CFTC, White House, BLS, Federal Register, 8-K
+   filings, Truth Social (via trumpstruth.org), GDELT 15-minute files, Polymarket, public Telegram.
+2. **Filter** — items over a day old, off the watch list or carrying obvious injection text never reach
+   the model. A repeat of a known story joins its cluster and costs no call.
+3. **Score** — Gemini, then Groq if it fails. The model has no tools, items are JSON data, and answers
+   must pass a schema. Budget: 40 items a run, 500 a day, 3 new GDELT stories a run.
+4. **Level** — per BTC, ETH and STOCKS: `trade`, `reduce`, `stand_aside`, or `unknown` when behind.
+   Bad news cuts longs and good news cuts shorts; nothing raises a position. Standing aside needs at
+   least two sources.
+
+Results are `news_scored.parquet` and `news_risk.parquet` in the `data` bucket, outside the nightly
+cache sync. Level changes are events of type `news_risk`.
 
 ## Database
 
