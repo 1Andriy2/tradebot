@@ -244,10 +244,12 @@ class Trader:
         bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
         scale = exposure_scale(wanted, self._twin_levels(symbol, state), symbol.split("/")[0], bar)
         decisions = []
-        for ts in new:
+        opens = df["open"].to_numpy(float)
+        for i in range(len(df) - len(new), len(df)):  # new bars are the tail of df
+            ts = df.index[i]
             pending = state.extra.pop("pending", None)
             if pending is not None:
-                book.fill(ts, pending["target"], float(df.at[ts, "open"]), pending["reason"])
+                book.fill(ts, pending["target"], float(opens[i]), pending["reason"])
             before = book.units
             after, shown = before, 0.0
             if ts in targets:
