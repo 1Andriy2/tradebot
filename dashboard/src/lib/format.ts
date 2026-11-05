@@ -47,6 +47,7 @@ export const REASONS: Record<string, string> = {
   exchange_close: "закрито біржею",
   no_change: "без змін",
   risk_cap: "перевищення ліміту позиції",
+  news_filter: "фільтр новин",
 };
 
 export const reason = (r: string) => REASONS[r] ?? r;

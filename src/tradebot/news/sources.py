@@ -13,10 +13,10 @@ import io
 import json
 import logging
 import re
-import time
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
 from urllib.parse import urlencode
 
@@ -35,7 +35,8 @@ OFFICIAL, NEWS, SOCIAL, GEO, MARKET = "official", "news", "social", "geo", "mark
 
 MAX_DOWNLOAD = 30_000_000  # a GDELT file is about 8 MB
 MAX_UNZIPPED = 200_000_000
-COLLECT_SECONDS = 240  # the job gets 10 minutes: leave room to score and save what was found
+COLLECT_SECONDS = 120  # the job gets 10 minutes: leave room to score and save what was found
+WORKERS = 8  # downloads are independent, and the level should be ready before the bar closes
 MAX_TEXT = 500
 ATOM = "{http://www.w3.org/2005/Atom}"
 
@@ -220,19 +221,21 @@ def collect(sources: dict[str, Source], now: pd.Timestamp, fetch: Fetch = downlo
             seconds: float = COLLECT_SECONDS) -> tuple[list[Item], dict[str, int]]:
     """Items from every source, and how many each gave (-1 for a source that failed or was skipped
     because time ran out)."""
+    pool = ThreadPoolExecutor(WORKERS)
+    futures = {name: pool.submit(source, fetch, now) for name, source in sources.items()}
+    wait(futures.values(), timeout=max(seconds, 0))
+    pool.shutdown(wait=False, cancel_futures=True)
     items: list[Item] = []
     counts: dict[str, int] = {}
-    deadline = time.monotonic() + seconds
-    for name, source in sources.items():
-        if time.monotonic() > deadline:
+    for name, future in futures.items():
+        counts[name] = -1
+        if not future.done() or future.cancelled():
             log.warning("news source %s skipped: out of time", name)
-            counts[name] = -1
             continue
         try:
-            found = source(fetch, now)
+            found = future.result()
         except Exception as exc:  # outside data can fail in any way, and must stop only this source
             log.warning("news source %s failed: %s %s", name, type(exc).__name__, exc)
-            counts[name] = -1
             continue
         counts[name] = len(found)
         items += found

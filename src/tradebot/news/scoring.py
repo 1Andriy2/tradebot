@@ -154,16 +154,22 @@ def providers_from_env(cfg: NewsConfig, env: Mapping[str, str] = os.environ) -> 
 
 
 def _ask(providers: list[Provider], system: str,
-         batch: list[dict[str, Any]]) -> tuple[dict[int, Assessment], str]:
-    user = json.dumps(batch, ensure_ascii=False)
-    ids = {row["id"] for row in batch}
+         batch: list[dict[str, Any]]) -> dict[int, tuple[Assessment, str]]:
+    """Each provider gets whatever the one before it did not validly answer."""
+    out: dict[int, tuple[Assessment, str]] = {}
     for provider in providers:
+        left = [row for row in batch if row["id"] not in out]
+        if not left:
+            break
         try:
-            return parse_answer(provider.complete(system, user), ids), provider.model
+            answers = parse_answer(provider.complete(system, json.dumps(left, ensure_ascii=False)),
+                                   {row["id"] for row in left})
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
             status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else ""
             log.warning("model %s failed: %s %s", provider.model, type(exc).__name__, status)
-    return {}, ""
+            continue
+        out |= {i: (answer, provider.model) for i, answer in answers.items()}
+    return out
 
 
 def score(providers: list[Provider], items: list[dict[str, Any]],
@@ -172,6 +178,5 @@ def score(providers: list[Provider], items: list[dict[str, Any]],
     system = f"{SYSTEM_PROMPT}\n\nToday is {now:%Y-%m-%d}."
     out: dict[int, tuple[Assessment, str]] = {}
     for start in range(0, len(items), BATCH):
-        answers, model = _ask(providers, system, items[start:start + BATCH])
-        out |= {i: (assessment, model) for i, assessment in answers.items()}
+        out |= _ask(providers, system, items[start:start + BATCH])
     return out

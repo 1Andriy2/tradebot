@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, ErrorNote, PageTitle } from "@/components/ui";
 import {
-  ago, ASSETS, assetList, byDay, CHANNELS, EVENT_TYPES, fmtClock, fmtImpact, fmtMult, LEVELS, outletName,
+  ago, ASSETS, assetList, byDay, CHANNELS, concerns, EVENT_TYPES, fmtClock, fmtImpact, fmtMult, LEVELS, outletName,
   safeUrl, SCOPES, SHORTS_ONLY_HINT, SIGNIFICANT, STANCES, storyTime, strength,
 } from "@/lib/news";
 import type { NewsItemRow, NewsLevelRow } from "@/lib/types";
@@ -13,6 +13,7 @@ import { useRows } from "@/lib/useRows";
 const DAYS = 7;
 const MAX_STORIES = DAYS * 500; // the news job scores at most 500 a day, so this never cuts the week
 const LEVEL_MAX_AGE_MS = 3_600_000; // the same limit the test agents apply
+const REFRESH_MS = 3_600_000; // a week of stories is the heavy read: an open tab repeats it hourly at most
 const SCOPE_ORDER = ["BTC", "ETH", "STOCKS"];
 
 const VIEWS: Record<string, { label: string; test: (i: NewsItemRow) => boolean }> = {
@@ -83,6 +84,7 @@ function LevelCard({ row, now }: { row: NewsLevelRow; now: number }) {
         <Pressure label="Негатив" value={row.negative} color="bg-rose-500" />
         <Pressure label="Позитив" value={row.positive} color="bg-emerald-500" />
       </div>
+      {row.stale && !expired && <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">Оцінка новин відстає, рівень може бути неповним</p>}
       <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
         {!expired && <>Лонги {fmtMult(row.long_mult)}, шорти {fmtMult(row.short_mult)} · </>}
         Подій за добу: {row.events}, джерел: {row.sources}
@@ -165,16 +167,17 @@ export default function NewsPage() {
   });
   const levels = useRows<NewsLevelRow>("news_levels", { realtime: true });
 
-  // Stories are the heavy table: refetch them once per news run, and only for a tab someone is looking at.
+  // Stories are the heavy table: refetch them at most hourly, and only for a tab someone is looking at.
   const { reload } = news;
   const updatedAt = levels.rows.map((r) => r.updated_at).sort().at(-1);
-  const loadedFor = useRef<string | undefined>(undefined);
+  const loadedAt = useRef(0);
   useEffect(() => {
     const refresh = () => {
-      if (!updatedAt || updatedAt === loadedFor.current) return;
-      if (!loadedFor.current) loadedFor.current = updatedAt; // the first load already has this run
-      else if (document.visibilityState === "visible") {
-        loadedFor.current = updatedAt;
+      if (!updatedAt) return;
+      const time = Date.now();
+      if (!loadedAt.current) loadedAt.current = time; // the first load already has this run
+      else if (document.visibilityState === "visible" && time - loadedAt.current >= REFRESH_MS) {
+        loadedAt.current = time;
         void reload();
       }
     };
@@ -187,7 +190,7 @@ export default function NewsPage() {
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase();
     return news.rows.filter((i) => VIEWS[view].test(i)
-      && (asset === "all" || assetList(i).includes(asset))
+      && (asset === "all" || concerns(i, asset))
       && (channel === "all" || i.channel === channel)
       && (topic === "all" || i.event_type === topic)
       && (!words || `${i.title} ${i.title_uk} ${i.subject} ${i.reason}`.toLowerCase().includes(words)))

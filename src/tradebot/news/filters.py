@@ -30,7 +30,7 @@ STRICT_SOURCES = {"sec_8k", "fr_rules"}
 # keeps obvious attempts away from it. The idea comes from koala73/worldmonitor; the code is ours.
 SUSPICIOUS = re.compile(r"(ignore|disregard|forget|override)\s+(all\s+|any\s+)?(the\s+|your\s+)?"
                         r"(previous|prior|above|earlier|system)\b|<\|[a-z_]+\|>|\[/?(inst|sys)\]|"
-                        r"(^|\s)(system|assistant)\s*:", re.I)
+                        r"^\s*(system|assistant)\s*:", re.I)
 
 # Few items a day, and a dull title here can still matter.
 ALWAYS_SCORED = {"fed_press", "fed_speeches", "sec_press", "cftc", "white_house", "bls", "truth_trump",

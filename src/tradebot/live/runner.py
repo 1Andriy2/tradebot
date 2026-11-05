@@ -40,6 +40,18 @@ from tradebot.store import Store
 log = logging.getLogger(__name__)
 
 LOOKBACK_BARS = 1000  # warm-up for the slowest feature (1h EMA-192)
+STOP_REASONS = ("stop_loss", "take_profit")
+
+
+@dataclass(frozen=True)
+class BarResult:
+    """What an agent did on one bar, for its news twin to follow."""
+
+    target: float
+    signal: float
+    reason: str
+    stop_price: float | None = None  # filled inside the bar, at this price
+    stop_reason: str = ""
 
 
 @dataclass
@@ -48,6 +60,11 @@ class StepReport:
     decisions: int = 0
     orders: int = 0
     errors: list[str] = field(default_factory=list)
+
+
+def _twin_reason(step: BarResult) -> str:
+    """Why a twin's position changed: the original's reason, or the filter if the original held."""
+    return "news_filter" if step.reason == "no_change" else step.reason
 
 
 def _action(before: float, after: float) -> str:
@@ -82,7 +99,7 @@ class Trader:
         self._long_history: dict[tuple[str, int], pd.DataFrame] = {}
         self.roster = list(self.agents)
         self.news_levels: pd.DataFrame | None = None  # None: unknown this step, not "no news"
-        self._targets: dict[tuple[str, str], dict[pd.Timestamp, tuple[float, float]]] = {}
+        self._targets: dict[tuple[str, str], dict[pd.Timestamp, BarResult]] = {}
 
     # ---------- public API ----------
 
@@ -216,7 +233,10 @@ class Trader:
             before = book.units
             decision = step_bar(book, state, policy, bar, agent.strategy.uses_stops)
             after = decision.target_units if decision else book.units
-            targets[ts] = (after, bar.signal)
+            stop = next((f for f in book.fills if f["time"] == ts and f["reason"] in STOP_REASONS), None)
+            targets[ts] = BarResult(after, bar.signal, decision.reason if decision else "no_change",
+                                    float(stop["price"]) if stop else None,  # type: ignore[arg-type]
+                                    str(stop["reason"]) if stop else "")
             decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, bar.signal, before,
                                                 after, decision.reason if decision else "no_change"))
         self._flush(agent.id, "shadow", symbol, state, book)
@@ -230,8 +250,8 @@ class Trader:
         """Hold the original's target for each new bar, scaled by the news level.
 
         A scaled copy of the original's position can never exceed it or sit on the other side, and
-        the original's rules and stops apply through it. Orders fill at the next open, so when the
-        original is stopped out inside a bar the twin leaves one bar later.
+        the original's rules apply through it. A stop the original hit inside a bar closes the twin at
+        the same price, and other orders fill at the next open, as they do for the original.
         """
         targets = self._targets.get((agent.id.removeprefix("news_"), symbol), {})
         row = self._load(agent.id, "shadow", symbol)
@@ -240,7 +260,7 @@ class Trader:
         new = df.index[df.index > last_bar]
         if len(new) == 0:
             return 0
-        wanted = pd.Series({ts: targets[ts][0] for ts in new if ts in targets}, dtype=float)
+        wanted = pd.Series({ts: targets[ts].target for ts in new if ts in targets}, dtype=float)
         bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
         scale = exposure_scale(wanted, self._twin_levels(symbol, state), symbol.split("/")[0], bar)
         decisions = []
@@ -251,14 +271,19 @@ class Trader:
             if pending is not None:
                 book.fill(ts, pending["target"], float(opens[i]), pending["reason"])
             before = book.units
-            after, shown = before, 0.0
-            if ts in targets:
-                after, shown = targets[ts][0] * scale[ts], targets[ts][1] * scale[ts] + 0.0
-            moved = abs(after - before) > EPS
-            if moved:
-                state.extra["pending"] = {"target": after, "reason": "signal"}
-            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, shown, before, after,
-                                                "signal" if moved else "no_change"))
+            step = targets.get(ts)
+            if step is None:
+                decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, 0.0, before, before,
+                                                    "no_change"))
+                continue
+            if step.stop_price is not None:
+                book.fill(ts, 0.0, step.stop_price, step.stop_reason, slippage=False)
+            after, moved = step.target * scale[ts], False
+            if abs(after - book.units) > EPS:
+                moved = True
+                state.extra["pending"] = {"target": after, "reason": _twin_reason(step)}
+            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, step.signal * scale[ts] + 0.0,
+                                                before, after, _twin_reason(step) if moved else "no_change"))
         self._flush(agent.id, "shadow", symbol, state, book)
         self.store.insert("decisions", decisions)
         self._save(agent.id, "shadow", symbol, state, book, new[-1])

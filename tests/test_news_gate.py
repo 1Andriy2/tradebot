@@ -200,6 +200,33 @@ def test_the_twin_never_exceeds_or_opposes_the_original(value: float) -> None:
     assert all(abs(t) <= abs(p) + 1e-12 and t * p >= 0 for p, t in zip(plain, twin, strict=True))
 
 
+class Stops(Strategy):
+    """Long, with the stop at work: the bar after entry falls through it."""
+
+    name = "stops"
+
+    def generate(self, df: pd.DataFrame) -> pd.Series:
+        return pd.Series(1.0, index=df.index)
+
+
+def test_a_stop_closes_the_twin_at_the_same_price_on_the_same_bar() -> None:
+    store = MemoryStore()
+    settings = Settings()
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    bot = Trader(settings, store, FakePublic(), None, [Agent("ma_cross", "baseline", Stops())])
+    bot.public.add_bar(100.0)
+    bot.step()
+    bot.public.add_bar(100.0)
+    bot.step()
+    bot.public.add_bar(50.0)
+    assert bot.step().errors == []
+    plain = store.select("trades", {"agent_id": "ma_cross"})
+    twin = store.select("trades", {"agent_id": "news_ma_cross"})
+    assert plain and twin and twin[-1]["exit_reason"] == plain[-1]["exit_reason"] == "stop_loss"
+    assert twin[-1]["exit_price"] == plain[-1]["exit_price"]
+    assert twin[-1]["exit_time"] == plain[-1]["exit_time"]
+
+
 def test_policy_and_simulation_know_nothing_about_news() -> None:
     root = Path(__file__).parents[1] / "src/tradebot"
     for name in ("policy.py", "simulate.py"):

@@ -89,6 +89,12 @@ export function outletName(source: string): string {
 
 export const assetList = (item: NewsItemRow): string[] => item.assets.split(",").filter(Boolean);
 
+/** Whether a story concerns a filter's asset. Market-wide crypto news counts for each coin, as in the risk level. */
+export function concerns(item: NewsItemRow, asset: string): boolean {
+  const tags = assetList(item);
+  return tags.includes(asset) || ((asset === "BTC" || asset === "ETH") && tags.includes("CRYPTO"));
+}
+
 export function safeUrl(url: string): string | undefined {
   return /^https?:\/\//i.test(url) ? url : undefined;
 }

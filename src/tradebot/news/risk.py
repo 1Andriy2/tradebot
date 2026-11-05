@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-TRADE, REDUCE, STAND_ASIDE, UNKNOWN = "trade", "reduce", "stand_aside", "unknown"
+TRADE, REDUCE, STAND_ASIDE = "trade", "reduce", "stand_aside"
 
 SCOPES = {"BTC": {"BTC", "CRYPTO"}, "ETH": {"ETH", "CRYPTO"}, "STOCKS": {"STOCKS"}}
 KIND_WEIGHT = {"official": 1.0, "news": 0.8, "market": 0.8, "geo": 0.6, "social": 0.5}
@@ -63,15 +63,15 @@ def _covers(assets: str, wanted: set[str]) -> bool:
 
 
 def assess_scope(scope: str, events: pd.DataFrame, now: pd.Timestamp, stale: bool) -> dict[str, Any]:
+    """``stale`` only marks that scoring is behind. Stories already rated are still true, so a level
+    stays in force: dropping a cut in the middle of a big event would be the worst moment for it."""
     mine = events[events["assets"].map(lambda a: _covers(a, SCOPES[scope])).astype(bool)]
     bad, good = mine[mine["impact"] < 0], mine[mine["impact"] > 0]
     negative, bad_sources = side_pressure(bad, now)
     positive, good_sources = side_pressure(good, now)
     long_mult, short_mult = multiplier(negative, bad_sources), multiplier(positive, good_sources)
-    if stale:  # no judgement without data: behave as if the filter were off, and say so
-        long_mult = short_mult = 1.0
     worst = min(long_mult, short_mult)
-    level = UNKNOWN if stale else TRADE if worst == 1.0 else STAND_ASIDE if worst == 0.0 else REDUCE
+    level = TRADE if worst == 1.0 else STAND_ASIDE if worst == 0.0 else REDUCE
     strongest = mine.reindex(mine["impact"].abs().sort_values(ascending=False).index)
     top = strongest.drop_duplicates("cluster").head(TOP)
     headlines = [f"{i:+.2f} {t[:120]}" for i, t in zip(top["impact"], top["title"], strict=True)]

@@ -116,11 +116,12 @@ def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataF
     This is the test the filter must pass before it may touch the demo account.
     """
     scope = coin.upper()
+    wanted = SCOPES.get(scope, {scope})
     tests: dict[str, pd.Series] = {}
     if len(scored):
         mine = scored[(scored["prompt_version"] == PROMPT_VERSION) & (scored["model"] == model)
                       & (scored["confidence"] >= MIN_CONFIDENCE)
-                      & scored["assets"].map(lambda a: bool(SCOPES[scope] & set(a.split(",")))).astype(bool)]
+                      & scored["assets"].map(lambda a: bool(wanted & set(a.split(",")))).astype(bool)]
         mine = mine[mine["status"] == "scored"]  # the story's own row, which alone has a rating time
         known = mine[["first_seen", "scored_at"]].max(axis=1)
         tests["llm_bad_news"] = _hours(known[mine["impact"] <= -STRONG_IMPACT])

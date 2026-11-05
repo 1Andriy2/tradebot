@@ -99,7 +99,8 @@ def first_status(item: Item, now: pd.Timestamp) -> str:
 def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.DataFrame:
     """New items only, each with a status. A repeat of a recent story joins that story's cluster."""
     seen = set(known["url"])
-    recent = known[(known["first_seen"] > now - SAME_STORY_WINDOW) & known["status"].isin([PENDING, SCORED])]
+    recent = known[(known["first_seen"] > now - SAME_STORY_WINDOW)
+                   & known["status"].isin([PENDING, SCORED, EXPIRED])]
     stories = [(words(t), c) for t, c in zip(recent["title"], recent["cluster"], strict=True)]
     rows = []
     geo_left = GEO_STORIES_PER_RUN
@@ -110,7 +111,9 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
         status, cluster = first_status(item, now), story_id(item["url"])
         if status == PENDING:
             tokens = words(item["title"])
-            match = next((c for other, c in stories if same_story(tokens, other)), None)
+            # Market items share a template, so their words say nothing: two moves are two events.
+            match = None if item["kind"] == "market" else next(
+                (c for other, c in stories if same_story(tokens, other)), None)
             if match is not None:
                 status, cluster = DUPLICATE, match
             elif item["kind"] != "geo" or geo_left > 0:

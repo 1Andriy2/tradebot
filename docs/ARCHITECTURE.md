@@ -63,7 +63,7 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
    the model. A repeat of a known story joins its cluster and costs no call.
 3. **Score** — Gemini, then Groq if it fails. The model has no tools, items are JSON data, and answers
    must pass a schema. Budget: 40 items a run, 500 a day, 3 new GDELT stories a run.
-4. **Level** — per BTC, ETH and STOCKS: `trade`, `reduce`, `stand_aside`, or `unknown` when behind.
+4. **Level** — per BTC, ETH and STOCKS: `trade`, `reduce` or `stand_aside`, flagged stale when behind.
    Bad news cuts longs and good news cuts shorts; nothing raises a position. Standing aside needs at
    least two sources.
 
