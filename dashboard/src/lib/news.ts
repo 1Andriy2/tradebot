@@ -108,7 +108,7 @@ export const fmtClock = (iso: string): string => clock.format(new Date(iso));
 
 /** When a story came out. A source's date is only trusted if it is not later than when we saw it. */
 export function storyTime(item: NewsItemRow): string {
-  return item.published < item.first_seen ? item.published : item.first_seen;
+  return new Date(item.published) < new Date(item.first_seen) ? item.published : item.first_seen;
 }
 
 export function dayLabel(iso: string, now: number): string {

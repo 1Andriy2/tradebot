@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ import pytest
 from tradebot.cli import _news_tables, build_parser
 from tradebot.config import NewsConfig
 from tradebot.data.sync import _paths
-from tradebot.news import filters, pipeline, risk, scoring, sources
+from tradebot.news import archive, filters, pipeline, risk, scoring, sources
 from tradebot.research.events import scored_news_studies
 from tradebot.store import MemoryStore
 
@@ -149,6 +150,22 @@ def test_polymarket_reports_large_moves_once_a_day() -> None:
                                   {"volume24hr": 100}, {"question": "Bitcoin above $100k on Friday?"}])
 def test_polymarket_skips_small_thin_and_price_markets(over: dict[str, Any]) -> None:
     assert sources.parse_polymarket(polymarket(market(**over)), NOW) == []
+
+
+def test_a_moved_market_without_prices_does_not_lose_the_others() -> None:
+    rows = sources.parse_polymarket(polymarket(market(id="2", outcomePrices=None), market()), NOW)
+    assert len(rows) == 1
+
+
+def test_an_entity_expansion_bomb_in_a_feed_is_refused_or_harmless() -> None:
+    entities = "".join(f'<!ENTITY a{i} "{f"&a{i - 1};" * 10}">' for i in range(1, 9))
+    bomb = (f'<!DOCTYPE r [<!ENTITY a0 "lol">{entities}]><rss><item><title>&a8;</title>'
+            "<link>https://x.example/1</link><pubDate>Thu, 05 Nov 2026 10:00:00 +0000</pubDate></item></rss>")
+    try:
+        rows = sources.parse_feed(bomb.encode(), "x", "news", NOW)
+    except ET.ParseError:
+        return
+    assert all(len(r["title"]) <= sources.MAX_TEXT for r in rows)
 
 
 def test_telegram_preview() -> None:
@@ -591,6 +608,89 @@ def test_a_failed_page_update_does_not_stop_the_run(tmp_path: Path) -> None:
     assert f"data/{pipeline.SCORED_FILE}" in store.files
 
 
+# Keeping the hot files small
+
+LATER = pd.Timestamp("2026-12-05 12:00", tz="UTC")  # archives start in November 2026
+
+
+def aged(*ages: str) -> pd.DataFrame:
+    rows = [{"ts": LATER - pd.Timedelta(age), "value": i} for i, age in enumerate(ages)]
+    return pd.DataFrame(rows)
+
+
+def test_fresh_rows_are_left_alone_and_nothing_is_written() -> None:
+    store = MemoryStore()
+    frame = aged("1h", "3D")
+    assert len(archive.rotate(store, "x", frame, "ts", LATER)) == 2 and store.files == {}
+
+
+def test_old_rows_move_to_their_month() -> None:
+    store = MemoryStore()
+    hot = archive.rotate(store, "x", aged("1h", "4D", "10D"), "ts", LATER)
+    assert list(hot["value"]) == [0]
+    assert set(store.files) == {"data/x_2026-11.parquet", "data/x_2026-12.parquet"}
+    assert len(archive.history(store, "x", "hot.parquet", LATER)) == 2
+
+
+def test_rotation_adds_to_an_archive_without_repeating_rows() -> None:
+    store = MemoryStore()
+    frame = aged("5D")
+    archive.rotate(store, "x", frame, "ts", LATER)
+    archive.rotate(store, "x", frame, "ts", LATER)
+    archive.rotate(store, "x", aged("6D"), "ts", LATER)
+    assert len(archive.history(store, "x", "hot.parquet", LATER)) == 2
+
+
+def test_a_failed_archive_keeps_every_row() -> None:
+    class Broken(MemoryStore):
+        def upload(self, bucket: str, path: str, data: bytes) -> None:
+            raise RuntimeError("503")
+
+    assert len(archive.rotate(Broken(), "x", aged("1h", "5D"), "ts", LATER)) == 2
+
+
+def test_a_failed_read_of_the_archive_does_not_overwrite_it() -> None:
+    class Flaky(MemoryStore):
+        def download(self, bucket: str, path: str) -> bytes:
+            raise RuntimeError("503 storage unavailable")
+
+    store = Flaky()
+    assert len(archive.rotate(store, "x", aged("5D"), "ts", LATER)) == 1 and store.files == {}
+
+
+def test_unrated_rows_are_not_archived(tmp_path: Path) -> None:
+    store = MemoryStore()
+    start = LATER - pd.Timedelta("5D")
+    items = [{**news_item("SEC sues Binance", "https://x.example/1", published=start), "first_seen": start},
+             {**news_item("Local bakery opens", "https://x.example/2", published=start), "first_seen": start}]
+    pipeline.run(tmp_path, store, static(items), [answering()], CFG, start)
+    pipeline.run(tmp_path, store, static([]), [answering()], CFG, LATER)
+    hot = pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.SCORED_FILE}"]))
+    assert hot.empty
+    kept = archive.history(store, pipeline.SCORED_STEM, pipeline.SCORED_FILE, LATER)
+    assert list(kept["url"]) == ["https://x.example/1"]
+
+
+def test_research_sees_archives_and_the_hot_file_together(tmp_path: Path) -> None:
+    store = MemoryStore()
+    archive.write_file(store, "news_scored_2026-11.parquet", aged("5D"))
+    archive.write_file(store, pipeline.SCORED_FILE, aged("1h"))
+    scored, levels = _news_tables(store, LATER)
+    assert len(scored) == 2 and levels.empty
+
+
+def test_a_hot_file_stays_small_over_many_runs(tmp_path: Path) -> None:
+    store = MemoryStore()
+    for day in range(12):
+        now = LATER + pd.Timedelta(days=day)
+        item = {**news_item(f"Bitcoin story number {day}", f"https://x.example/{day}", published=now),
+                "first_seen": now}
+        pipeline.run(tmp_path, store, static([item]), [answering()], CFG, now)
+    hot = pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.SCORED_FILE}"]))
+    assert len(hot) <= 5
+    assert len(archive.history(store, pipeline.SCORED_STEM, pipeline.SCORED_FILE, now)) == 12
+
+
 # Nightly tests of the filter
 
 MODEL = "primary-model"
@@ -635,6 +735,13 @@ def test_studies_find_a_real_effect_of_bad_ratings() -> None:
     assert bad["status"] == "tested" and bad["mean_after"] < bad["base_mean"] and bad["q_value"] < 0.05
 
 
+def test_studies_work_when_candles_and_scores_use_different_time_units() -> None:
+    close = falling_after(STAMPS, INDEX)
+    close.index = close.index.as_unit("ms")
+    scored = rated(pd.DatetimeIndex(STAMPS).as_unit("us"))
+    assert study(nightly(close, scored, EMPTY, "btc"), "llm_bad_news")["n"] > 30
+
+
 def test_studies_use_the_time_the_bot_knew() -> None:
     late = rated(STAMPS + pd.Timedelta("5h"), published=STAMPS)
     bad = study(nightly(falling_after(STAMPS, INDEX), late, EMPTY, "btc"), "llm_bad_news")
@@ -672,5 +779,5 @@ def test_filter_study_counts_only_hours_that_cut_a_side_and_were_not_stale() -> 
 
 
 def test_research_survives_missing_news_files() -> None:
-    scored, levels = _news_tables(MemoryStore())
+    scored, levels = _news_tables(MemoryStore(), NOW)
     assert scored.empty and levels.empty

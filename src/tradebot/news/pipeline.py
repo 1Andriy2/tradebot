@@ -17,6 +17,7 @@ from typing import Any, cast
 import pandas as pd
 
 from tradebot.config import NewsConfig
+from tradebot.news.archive import BUCKET, is_missing, rotate
 from tradebot.news.filters import relevant, same_story, suspicious, words
 from tradebot.news.risk import assess
 from tradebot.news.scoring import PROMPT_VERSION, Assessment, Provider, score
@@ -25,9 +26,8 @@ from tradebot.store import Store
 
 log = logging.getLogger(__name__)
 
-BUCKET = "data"
-SCORED_FILE = "news_scored.parquet"
-RISK_FILE = "news_risk.parquet"
+SCORED_STEM, RISK_STEM = "news_scored", "news_risk"
+SCORED_FILE, RISK_FILE = f"{SCORED_STEM}.parquet", f"{RISK_STEM}.parquet"
 
 PENDING, SCORED, DUPLICATE, IGNORED, OLD, EXPIRED, SUSPICIOUS = (
     "pending", "scored", "duplicate", "ignored", "old", "expired", "suspicious")
@@ -158,6 +158,11 @@ def page_rows(frame: pd.DataFrame, clusters: set[str] | None = None) -> list[dic
     return [{**row, "outlets": [str(s) for s in outlets[row["cluster"]]]} for row in rows]
 
 
+def rated_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """What is worth archiving. The rest was only kept to recognise a link already seen."""
+    return frame[frame["status"].isin([SCORED, DUPLICATE])]
+
+
 def publish(store: Store, frame: pd.DataFrame, clusters: set[str], report: NewsRun) -> None:
     """Update the page's tables. The Parquet files are the record, so a failure here stops nothing."""
     levels = [{**{k: r[k] for k in LEVEL_FIELDS}, "updated_at": r["ts"]} for r in report.risk]
@@ -209,10 +214,8 @@ def _pull(store: Store, path: Path) -> None:
     failure as empty would upload an empty table over the whole history."""
     try:
         path.write_bytes(store.download(BUCKET, path.name))
-    except KeyError:  # MemoryStore
-        pass
     except Exception as exc:
-        if "not found" not in str(exc).lower():
+        if not is_missing(exc):
             raise
         log.info("no %s yet, starting empty", path.name)
 
@@ -229,10 +232,12 @@ def run(data_dir: Path, store: Store, sources: dict[str, Source], providers: lis
     risk = pd.read_parquet(risk_path) if risk_path.exists() else pd.DataFrame()
 
     scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch)
+    publish(store, scored, report.touched, report)
+    scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
+    risk = rotate(store, RISK_STEM, risk, "ts", now)
     scored.to_parquet(scored_path)
     risk.to_parquet(risk_path)
     for path in (scored_path, risk_path):
         store.upload(BUCKET, path.name, path.read_bytes())
     store.insert("events", report.changes)
-    publish(store, scored, report.touched, report)
     return report

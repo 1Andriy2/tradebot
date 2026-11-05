@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import io
 import logging
 import sys
 from pathlib import Path
@@ -158,16 +157,17 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _news_tables(store: Store) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Scored news and risk levels, read only: the news job owns these files."""
-    from tradebot.news.pipeline import BUCKET, RISK_FILE, SCORED_FILE
+def _news_tables(store: Store, now: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """All scored news and risk levels, read only: the news job owns these files."""
+    from tradebot.news.archive import history
+    from tradebot.news.pipeline import RISK_FILE, RISK_STEM, SCORED_FILE, SCORED_STEM
 
     tables = []
-    for name in (SCORED_FILE, RISK_FILE):
+    for stem, hot in ((SCORED_STEM, SCORED_FILE), (RISK_STEM, RISK_FILE)):
         try:
-            tables.append(pd.read_parquet(io.BytesIO(store.download(BUCKET, name))))
+            tables.append(history(store, stem, hot, now))
         except Exception as exc:  # studies of everything else do not depend on this
-            log.warning("no %s: %s", name, type(exc).__name__)
+            log.warning("no %s: %s", stem, type(exc).__name__)
             tables.append(pd.DataFrame())
     return tables[0], tables[1]
 
@@ -178,7 +178,7 @@ def _study_events(settings: Settings, store: Store, now: pd.Timestamp) -> list[d
     from tradebot.data.news import news_path
     from tradebot.research.events import liquidation_studies, news_studies, scored_news_studies
 
-    scored, levels = _news_tables(store)
+    scored, levels = _news_tables(store, now)
     path = news_path(settings.data_path)
     news = pd.read_parquet(path) if path.exists() else pd.DataFrame()
     rows = []

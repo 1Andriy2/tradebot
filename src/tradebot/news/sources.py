@@ -151,8 +151,8 @@ def parse_polymarket(content: bytes, seen_at: pd.Timestamp) -> list[Item]:
             change = float(market.get("oneHourPriceChange") or 0)
             volume = float(market.get("volume24hr") or 0)
             question = clean(market.get("question"))
-            if abs(change) < MARKET_MOVE or volume < MARKET_VOLUME \
-                    or PRICE_MARKET.search(question):
+            if abs(change) < MARKET_MOVE or volume < MARKET_VOLUME or PRICE_MARKET.search(question) \
+                    or not market.get("outcomePrices"):
                 continue
             yes = float(json.loads(market["outcomePrices"])[0])
             url = f"https://polymarket.com/event/{event['slug']}?m={market['id']}&d={seen_at:%Y-%m-%d}"

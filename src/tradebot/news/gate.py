@@ -11,7 +11,8 @@ import io
 
 import pandas as pd
 
-from tradebot.news.pipeline import BUCKET, RISK_FILE
+from tradebot.news.archive import BUCKET
+from tradebot.news.pipeline import RISK_FILE
 from tradebot.store import Store
 
 MAX_AGE = pd.Timedelta("1h")
