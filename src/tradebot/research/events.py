@@ -128,7 +128,7 @@ def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataF
         tests["llm_bad_news"] = _hours(known[mine["impact"] <= -STRONG_IMPACT])
         tests["llm_good_news"] = _hours(known[mine["impact"] >= STRONG_IMPACT])
     if len(levels):
-        mine = levels[(levels["scope"] == scope) & ~levels["stale"].astype(bool)].sort_values("ts")
+        mine = levels[levels["scope"] == scope].sort_values("ts")  # stale levels stay in force
         tests["filter_cut_longs"] = _hours(mine.loc[_starts(mine["long_mult"] < 1), "ts"])
         tests["filter_cut_shorts"] = _hours(mine.loc[_starts(mine["short_mult"] < 1), "ts"])
     out = []

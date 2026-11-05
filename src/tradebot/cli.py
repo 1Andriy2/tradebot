@@ -276,21 +276,21 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     if not providers:
         log.warning("no GEMINI_API_KEY or GROQ_API_KEY: collecting without scoring")
     store = _store(args)
+    watchlist: list[dict[str, Any]] | None = None
     try:
         watchlist = store.select("watchlist")
     except Exception as exc:  # followed assets are extra: the general run must go on without them
         log.warning("no watchlist this run: %s", type(exc).__name__)
-        watchlist = []
     report = run(store, all_sources(channels, watchlist), providers, settings.news, now,
                  clock=lambda: pd.Timestamp.now(tz="UTC"),
-                 watched={str(a["id"]): search_name(a) for a in watchlist})
+                 watched=None if watchlist is None else {str(a["id"]): search_name(a) for a in watchlist})
     failed = [name for name, count in report.counts.items() if count < 0]
     print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
           f"pending={report.pending} failed={failed}")
     for row in report.risk:
         print(f"{row['scope']:7s} {row['level']:12s} long x{row['long_mult']} short x{row['short_mult']} "
               f"bad={row['negative']:.2f} good={row['positive']:.2f} events={row['events']}")
-    return 0 if report.sources_ok else 1
+    return 0 if report.general_ok else 1
 
 
 def cmd_reset_kill_switch(settings: Settings, args: argparse.Namespace) -> int:

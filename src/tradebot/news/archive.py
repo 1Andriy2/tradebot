@@ -48,15 +48,19 @@ def archive_name(stem: str, month: pd.Period) -> str:
 
 
 def rotate(store: Store, stem: str, frame: pd.DataFrame, column: str, now: pd.Timestamp,
-           worth_keeping: Callable[[pd.DataFrame], pd.DataFrame] = lambda rows: rows) -> pd.DataFrame:
+           worth_keeping: Callable[[pd.DataFrame], pd.DataFrame] = lambda rows: rows,
+           together: str | None = None) -> pd.DataFrame:
     """Move old rows to monthly archives and return the rest.
 
+    Rows sharing a ``together`` value move as one, when the newest of them is old: a story's age
+    comes from its first report, which must not leave while a repeat of it stays.
     The archive is written before anything leaves ``frame``, so a failure loses nothing: the rows
     simply wait for the next run. Writing the same rows twice is harmless, they are de-duplicated.
     """
     if frame.empty or frame[column].min() >= now - ROTATE_AFTER:
         return frame
-    old = frame[column] < now - HOT
+    newest = frame.groupby(together)[column].transform("max") if together else frame[column]
+    old = newest < now - HOT
     try:
         kept = worth_keeping(frame[old])
         months = kept[column].dt.tz_localize(None).dt.to_period("M")

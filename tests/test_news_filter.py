@@ -277,6 +277,12 @@ def test_a_headline_must_name_the_asset() -> None:
     assert filters.mentions("McDonald's sales fall", "MCDONALDS", "MCD")
     assert filters.mentions("McDonald's sales fall", "McDonald's", "MCD")
     assert filters.mentions("McDonalds: 8-K report", "McDonald's", "MCD")
+
+
+@pytest.mark.parametrize("title", ["Apple's iPhone sales beat", "Apple’s iPhone sales beat"])
+def test_a_possessive_still_names_the_asset(title: str) -> None:
+    assert filters.mentions(title, "Apple", "AAPL")
+    assert filters.mentions("Why $AAPL's rally continues", "Apple", "AAPL")
     assert filters.mentions("Bank of America raises dividend", "BANK OF AMERICA", "BAC")
 
 
@@ -331,6 +337,27 @@ def run_watched(items: list[dict[str, Any]], provider: scoring.Provider, known: 
 def test_a_followed_story_is_tagged_with_its_asset_whatever_the_model_lists() -> None:
     frame, _ = run_watched([watched_item()], answering(assets=("CRYPTO",)))
     assert pipeline.page_rows(frame)[0]["assets"] == "SOL,CRYPTO"
+
+
+def test_a_failed_watchlist_read_is_not_an_unsubscribe() -> None:
+    frame, _ = run_watched([watched_item()], scoring.Provider("m", down))
+
+    def fail(system: str, user: str) -> str:
+        raise AssertionError("no model call for an asset whose name is unknown this run")
+
+    again, _, report = pipeline.update(frame, pd.DataFrame(), static([]), [scoring.Provider("m", fail)], CFG,
+                                       NOW, watched=None)
+    assert again.iloc[0]["status"] == pipeline.PENDING and report.pending == 1
+
+
+def test_followed_sources_cannot_make_a_dead_general_stream_look_alive() -> None:
+    def broken(fetch: sources.Fetch, now: pd.Timestamp) -> list[sources.Item]:
+        raise httpx.ConnectError("down")
+
+    sets = {"coindesk": broken, "google_crypto:solana": lambda fetch, now: []}
+    _, _, report = pipeline.update(pipeline.typed(pd.DataFrame()), pd.DataFrame(), sets, [], CFG, NOW,
+                                   watched=FOLLOWED)
+    assert report.general_ok == 0 and all(r["stale"] for r in report.risk)
 
 
 def test_a_followed_story_never_reaches_the_risk_level() -> None:
@@ -1099,6 +1126,15 @@ def test_rotation_adds_to_an_archive_without_repeating_rows() -> None:
     assert len(archive.history(store, "x", "hot.parquet", LATER)) == 2
 
 
+def test_a_story_leaves_the_hot_file_as_a_whole() -> None:
+    """Regression: the first report left alone, and its repeat made the story look fresh."""
+    store = MemoryStore()
+    frame = pd.DataFrame({"ts": [LATER - pd.Timedelta("50h"), LATER - pd.Timedelta("90h"),
+                                 LATER - pd.Timedelta("5h")], "story": ["a", "b", "a"]})
+    hot = archive.rotate(store, "x", frame, "ts", LATER, together="story")
+    assert list(hot["story"]) == ["a", "a"]
+
+
 def test_a_failed_archive_keeps_every_row() -> None:
     class Broken(MemoryStore):
         def upload(self, bucket: str, path: str, data: bytes) -> None:
@@ -1288,7 +1324,7 @@ def test_a_story_told_many_times_is_one_event() -> None:
     assert study(rows, "llm_bad_news")["n"] <= 1
 
 
-def test_filter_study_counts_only_hours_that_cut_a_side_and_were_not_stale() -> None:
+def test_filter_study_counts_cuts_of_its_side_including_stale_ones_which_stay_in_force() -> None:
     cuts = pd.DataFrame({"ts": STAMPS, "scope": "BTC", "long_mult": 0.5, "short_mult": 1.0, "stale": False})
     calm = cuts.assign(ts=cuts["ts"] + pd.Timedelta("20h"), long_mult=1.0)
     levels = pd.concat([cuts, calm])
@@ -1296,8 +1332,7 @@ def test_filter_study_counts_only_hours_that_cut_a_side_and_were_not_stale() -> 
     rows = nightly(close, EMPTY, levels, "btc")
     assert study(rows, "filter_cut_longs")["status"] == "tested"
     assert study(rows, "filter_cut_shorts")["n"] == 0
-    stale = nightly(close, EMPTY, levels.assign(stale=True), "btc")
-    assert study(stale, "filter_cut_longs")["n"] == 0
+    assert study(nightly(close, EMPTY, levels.assign(stale=True), "btc"), "filter_cut_longs")["n"] > 0
 
 
 def test_research_survives_missing_news_files() -> None:

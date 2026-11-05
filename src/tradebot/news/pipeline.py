@@ -21,7 +21,7 @@ from tradebot.news.archive import read_file, rotate, write_file
 from tradebot.news.filters import relevant, same_story, suspicious, words
 from tradebot.news.risk import assess
 from tradebot.news.scoring import PROMPT_VERSION, Assessment, Provider, score
-from tradebot.news.sources import Fetch, Item, Source, collect, download
+from tradebot.news.sources import ASSET_SOURCES, Fetch, Item, Source, collect, download
 from tradebot.store import Store
 
 log = logging.getLogger(__name__)
@@ -73,6 +73,11 @@ class NewsRun:
     @property
     def sources_ok(self) -> int:
         return sum(n >= 0 for n in self.counts.values())
+
+    @property
+    def general_ok(self) -> int:
+        """General sources that answered. Followed assets must not make the filter look healthy."""
+        return sum(n >= 0 for name, n in self.counts.items() if not name.startswith(ASSET_SOURCES))
 
 
 def typed(frame: pd.DataFrame) -> pd.DataFrame:
@@ -237,21 +242,24 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
 
     ``now`` is the start of the run. Ratings and levels are stamped by ``clock`` once they exist,
     because tests of the filter must not credit it with a moment before it knew. ``watched`` maps
-    the ids of followed assets to their names; anything unsubscribed stops at once.
+    the ids of followed assets to their names, and anything unsubscribed stops at once. ``None``
+    means the list could not be read, which is not the same as nothing being followed.
     """
-    watched = watched or {}
     items, counts = collect(sources, now, fetch)
     fresh = ingest(scored, items, now)
     frame = fresh if scored.empty else pd.concat([scored, fresh]) if len(fresh) else scored
     frame = frame.reset_index(drop=True)
     frame.loc[(frame["status"] == PENDING) & (frame["first_seen"] < now - RETRY_FOR), "status"] = EXPIRED
-    unrated = frame["status"].isin([PENDING, DUPLICATE]) & frame["impact"].isna()
-    frame.loc[unrated & (frame["watch"] != "") & ~frame["watch"].isin(watched), "status"] = IGNORED
+    if watched is not None:
+        unrated = frame["status"].isin([PENDING, DUPLICATE]) & frame["impact"].isna()
+        frame.loc[unrated & (frame["watch"] != "") & ~frame["watch"].isin(watched), "status"] = IGNORED
     choose_heads(frame)
 
     batch = to_score(frame, now, cfg)
+    names = watched or {}
+    batch = batch[(batch["watch"] == "") | batch["watch"].isin(names)]  # the rest wait for their list
     payload = [{"id": int(i), "kind": r["kind"], "text": r["title"],
-                **({"asset": f"{watched[r['watch']]} ({r['ticker']})"} if r["watch"] in watched else {})}
+                **({"asset": f"{names[r['watch']]} ({r['ticker']})"} if r["watch"] else {})}
                for i, r in zip(batch.index, batch.to_dict("records"), strict=True)]
     answers = score(providers, payload, now) if payload and providers else {}
     done = clock() if clock else now
@@ -263,7 +271,7 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     behind = int((waiting["first_seen"] < now - STALE_AFTER).sum()) >= STALE_BACKLOG
     touched = set(frame.loc[list(answers), "cluster"]) | set(fresh["cluster"])
     report = NewsRun(counts, new=len(fresh), scored=len(answers), pending=len(pending), touched=touched)
-    stale = behind or report.sources_ok == 0
+    stale = behind or report.general_ok == 0
     report.risk = assess(frame, done, stale)
     report.changes = level_changes(risk, report.risk)
     rows = pd.DataFrame(report.risk).drop(columns="top")  # headlines go to events, not this file
@@ -286,7 +294,7 @@ def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg
     scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch, clock, watched)
     publish(store, scored, report, now)
     scored = scored[scored["status"].isin(REMEMBERED)]
-    scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
+    scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows, together="cluster")
     risk = rotate(store, RISK_STEM, risk, "ts", now)
     write_file(store, SCORED_FILE, scored)
     write_file(store, RISK_FILE, risk)

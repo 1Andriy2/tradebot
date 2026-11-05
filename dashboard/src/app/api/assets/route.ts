@@ -57,7 +57,8 @@ async function coins(ticker: string): Promise<AssetCandidate[]> {
     .slice(0, MAX_COINS);
 }
 
-async function stocks(ticker: string): Promise<AssetCandidate[]> {
+async function stocks(typed: string): Promise<AssetCandidate[]> {
+  const ticker = typed.replace(".", "-"); // people write BRK.B, the SEC and Yahoo BRK-B
   const all = await daily<Record<string, Company>>("https://www.sec.gov/files/company_tickers.json");
   const company = Object.values(all).find((c) => c.ticker.toUpperCase() === ticker);
   if (!company) return [];

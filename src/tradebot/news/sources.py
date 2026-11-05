@@ -36,6 +36,7 @@ OFFICIAL, NEWS, SOCIAL, GEO, MARKET, WATCH = "official", "news", "social", "geo"
 MAX_DOWNLOAD = 30_000_000  # a GDELT file is about 8 MB
 MAX_UNZIPPED = 200_000_000
 COLLECT_SECONDS = 120  # the job gets 10 minutes: leave room to score and save what was found
+ASSET_SOURCES = ("google_", "yahoo_", "filings_")  # names of sources for followed assets
 WORKERS = 8  # downloads are independent, and the level should be ready before the bar closes
 MAX_TEXT = 500
 ATOM = "{http://www.w3.org/2005/Atom}"

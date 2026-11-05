@@ -211,7 +211,7 @@ export default function NewsPage() {
   return (
     <>
       <PageTitle>Новини та ризик</PageTitle>
-      <ErrorNote error={news.error ?? levels.error} />
+      <ErrorNote error={news.error ?? levels.error ?? watchlist.error} />
 
       {cards.length > 0 && (
         <>

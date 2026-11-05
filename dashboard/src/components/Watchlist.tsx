@@ -52,7 +52,13 @@ export function Watchlist({ rows, onSubscribed, onRemoved }: {
       id: item.id, kind: item.kind, ticker: item.ticker, name: item.name, source_id: item.source_id,
     });
     setBusy(false);
-    if (error && error.code !== "23505") { // already followed: nothing to do
+    if (error?.code === "23505") {
+      setChoices([]);
+      setQuery("");
+      setNote(`${item.name} уже у списку`);
+      return;
+    }
+    if (error) {
       setNote(`Не вдалося підписатися: ${error.message}`);
       return;
     }
