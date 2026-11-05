@@ -41,7 +41,7 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
 | `rl/` | Gymnasium env, PPO training, `RLStrategy`. |
 | `registry.py` | Model versions, champion/challenger promotion, model storage. |
 | `store.py` | Supabase store (service role) and in-memory store for tests. |
-| `news/` | News risk filter: `sources`, `filters`, `scoring`, `risk`, `pipeline`. Trading does not read it yet. |
+| `news/` | News risk filter: `sources`, `filters`, `scoring`, `risk`, `pipeline`, `gate`. Only a shadow agent reads it. |
 
 ## Learning loop
 
@@ -69,6 +69,10 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
 
 Results are `news_scored.parquet` and `news_risk.parquet` in the `data` bucket, outside the nightly
 cache sync. Level changes are events of type `news_risk`.
+
+5. **Test** — `news_<champion>` is a shadow twin of the champion: the same signal, scaled by the level in
+   force when each bar closed. Compare it with the champion from the twin's first bar. The demo account
+   never reads the levels.
 
 ## Database
 

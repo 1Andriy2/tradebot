@@ -84,7 +84,7 @@ def test_shadow_step_is_idempotent() -> None:
     trader, store = make_trader(None, public)
     first = trader.step()
     second = trader.step()
-    assert first.decisions == 2 and second.decisions == 0
+    assert first.decisions == 3 and second.decisions == 0  # two agents and the champion's news twin
     assert not first.errors
     assert store.select("bot_status")[0]["mode"] == "shadow-only"
 
@@ -218,7 +218,7 @@ def test_only_agents_that_ask_get_a_longer_history() -> None:
     public = FakePublic(n=3000)
     trader, store, usual, long = long_history_trader(public)
     report = trader.step()
-    assert not report.errors and report.decisions == 2
+    assert not report.errors and report.decisions == 3  # two agents and the champion's news twin
     assert usual.seen[-1] <= LOOKBACK_BARS
     assert long.seen[-1] >= 2499
     assert store.select("agent_state", {"agent_id": "long", "venue": "shadow"})

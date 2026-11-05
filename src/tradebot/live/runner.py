@@ -2,7 +2,8 @@
 
 Every step, for each symbol, on the last fully closed candle:
 - every agent advances its shadow paper book (same rules as the backtester);
-- the champion agent also trades the Bybit demo account (if a venue is configured).
+- the champion agent also trades the Bybit demo account (if a venue is configured);
+- a twin of the champion runs a shadow book behind the news filter, to test that filter.
 Each step is idempotent per bar, so a doubled cron run does not trade twice.
 """
 
@@ -18,10 +19,11 @@ import numpy as np
 import pandas as pd
 
 from tradebot import indicators as ind
-from tradebot.agents import DEFAULT_CHAMPION, Agent, all_agents
+from tradebot.agents import DEFAULT_CHAMPION, Agent, all_agents, news_twin
 from tradebot.config import Settings
 from tradebot.data.history import fetch_ohlcv_range
 from tradebot.exchange.venue import Venue
+from tradebot.news.gate import apply_levels, load_levels
 from tradebot.paper import EPS, PaperBook
 from tradebot.policy import DecisionPolicy, PolicyState
 from tradebot.risk import RiskManager
@@ -71,17 +73,20 @@ class Trader:
         self.slot_equity = settings.backtest.initial_equity / len(self.symbols)
         self.last_price: dict[str, float] = {}
         self._long_history: dict[tuple[str, int], pd.DataFrame] = {}
+        self.roster = list(self.agents)
+        self.news_levels = pd.DataFrame()
 
     # ---------- public API ----------
 
     def step(self) -> StepReport:
         report = StepReport()
         self._long_history.clear()
-        self.store.upsert("agents", [
-            {"id": a.id, "kind": a.kind, "label": a.strategy.label, "params": a.strategy.params}
-            for a in self.agents
-        ], on_conflict="id")
         champion = self._champion_id()
+        self._prepare_news_twin(champion)
+        self.store.upsert("agents", [
+            {"id": a.id, "kind": a.kind, "label": a.label, "params": a.strategy.params}
+            for a in self.roster
+        ], on_conflict="id")
         for symbol in self.symbols:
             try:
                 df = self._recent_candles(symbol)
@@ -92,7 +97,7 @@ class Trader:
             self.last_price[symbol] = float(df["close"].iloc[-1])
             atr = ind.atr(df, self.settings.risk.atr_period)
             # Each agent is isolated: one failing agent (or a demo-venue error) never stops the rest.
-            for agent in self.agents:
+            for agent in self.roster:
                 try:
                     signal = self._signal(agent, symbol, df)
                     report.decisions += self._advance_shadow(agent, symbol, df, signal, atr)
@@ -103,6 +108,22 @@ class Trader:
         self._snapshot_equity()
         self._status(report)
         return report
+
+    def _prepare_news_twin(self, champion: str) -> None:
+        """Add the champion's twin for this step. News problems never stop a step: without levels
+        the twin just follows the champion."""
+        base = next((a for a in self.agents if a.id == champion), None)
+        self.roster = list(self.agents)
+        if base is None:
+            return
+        twin = news_twin(base)
+        self.roster.append(twin)
+        self.policies[twin.id] = self.policies[base.id]
+        try:
+            self.news_levels = load_levels(self.store)
+        except Exception as exc:
+            log.warning("no news levels this step: %s", type(exc).__name__)
+            self.news_levels = pd.DataFrame()
 
     def _error(self, report: StepReport, msg: str, agent_id: str | None = None) -> None:
         log.exception("step failed: %s", msg)
@@ -126,7 +147,15 @@ class Trader:
         return df
 
     def _signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
-        """The agent's signal on the step's bars, from a longer history if it needs one."""
+        """The agent's signal on the step's bars, behind the news filter if it is the twin."""
+        signal = self._plain_signal(agent, symbol, df)
+        if not agent.news_gated:
+            return signal
+        bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
+        return apply_levels(signal, self.news_levels, symbol.split("/")[0], bar)
+
+    def _plain_signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
+        """From a longer history if the agent needs one."""
         need = agent.strategy.history_bars
         if need <= LOOKBACK_BARS:
             return agent.strategy.signal(df)
@@ -306,7 +335,7 @@ class Trader:
     def _snapshot_equity(self) -> None:
         now = pd.Timestamp.now(tz="UTC").floor("min")
         rows = []
-        for agent in self.agents:
+        for agent in self.roster:
             total = 0.0
             for symbol in self.symbols:
                 row = self._load(agent.id, "shadow", symbol)

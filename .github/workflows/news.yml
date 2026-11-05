@@ -1,4 +1,4 @@
-# News risk filter: collect, score, work out the risk level. Trading does not read it yet.
+# News risk filter: collect, score, work out the risk level. Only a shadow agent reads it.
 name: News step
 
 # Triggered by Supabase Cron (supabase/migrations/20261105120000_news_cron.sql).

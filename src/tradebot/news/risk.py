@@ -2,7 +2,7 @@
 
 Levels can only reduce exposure: bad news cuts longs, good news cuts shorts, and nothing ever
 raises a position. Every number here was fixed by reasoning, before any data, and none was tuned.
-Nothing in trading reads this yet.
+Only a shadow agent reads these levels (see tradebot.news.gate); the demo account does not.
 """
 
 from __future__ import annotations

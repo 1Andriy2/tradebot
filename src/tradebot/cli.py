@@ -230,7 +230,7 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
-    """Collect and score news into a risk level. Trading does not read it yet."""
+    """Collect and score news into a risk level. Only a shadow agent reads it."""
     from tradebot.news.filters import relevant
     from tradebot.news.pipeline import run
     from tradebot.news.scoring import providers_from_env
@@ -315,7 +315,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--workers", type=int, default=4)
     rs.add_argument("--families", nargs="*", help="subset of strategy families")
     _data_flags(rs)
-    nw = sub.add_parser("news", help="collect and score news into a risk level (does not affect trading)")
+    nw = sub.add_parser("news", help="collect and score news into a risk level (read only by a shadow agent)")
     nw.add_argument("--check", action="store_true", help="only show which sources respond")
     nw.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     ks = sub.add_parser("reset-kill-switch", help="manually reset a tripped kill switch (human decision)")
