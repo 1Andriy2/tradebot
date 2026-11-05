@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot import indicators as ind
+from tradebot.strategies.analogs import AnalogForecast
 from tradebot.strategies.base import Strategy, hysteresis
 from tradebot.strategies.baselines import (
     BollingerBreakout,
@@ -158,6 +159,7 @@ FAMILIES: dict[str, tuple[Callable[..., Strategy], ParamGrid]] = {
                                      for a in (20.0, 25.0) for n in (100, 500)]),
     "vol_scaled_trend": (VolScaledTrend, [{"fast": f, "slow": s, "lookback": n}
                                           for f, s in ((20, 100), (50, 200)) for n in (100, 500)]),
+    "analog": (AnalogForecast, [{"k": k, "horizon": h} for k in (50, 200) for h in (16, 64)]),
     "chandelier_trend": (ChandelierTrend, [{"mult": m, "max_hold": h}
                                            for m in (2.5, 3.0) for h in (96, 288)]),
 }

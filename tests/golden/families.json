@@ -5,6 +5,12 @@
   "total_return": 0.02148627,
   "win_rate": 0.42857143
  },
+ "analog": {
+  "max_drawdown": 0.09539529,
+  "num_trades": 365.0,
+  "total_return": -0.06031381,
+  "win_rate": 0.41369863
+ },
  "bb_breakout": {
   "max_drawdown": 0.02879735,
   "num_trades": 90.0,
