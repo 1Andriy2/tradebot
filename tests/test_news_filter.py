@@ -7,13 +7,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 import pandas as pd
 import pytest
 
-from tradebot.cli import build_parser
+from tradebot.cli import _news_tables, build_parser
 from tradebot.config import NewsConfig
 from tradebot.data.sync import _paths
 from tradebot.news import filters, pipeline, risk, scoring, sources
+from tradebot.research.events import scored_news_studies
 from tradebot.store import MemoryStore
 
 NOW = pd.Timestamp("2026-11-05 12:00", tz="UTC")
@@ -545,3 +547,88 @@ def test_news_job_is_kept_away_from_exchange_keys() -> None:
 def test_cli_accepts_the_command() -> None:
     args = build_parser().parse_args(["news", "--check"])
     assert args.command == "news" and args.check
+
+
+# Nightly tests of the filter
+
+MODEL = "primary-model"
+
+
+def falling_after(stamps: pd.DatetimeIndex, index: pd.DatetimeIndex) -> pd.Series:
+    returns = np.random.default_rng(1).normal(0, 0.003, len(index))
+    for stamp in stamps:
+        i = index.get_loc(stamp.ceil("1h"))
+        returns[i + 1: i + 5] -= 0.006
+    return pd.Series(100 * np.exp(np.cumsum(returns)), index=index)
+
+
+def rated(stamps: pd.DatetimeIndex, **over: Any) -> pd.DataFrame:
+    rows = {"first_seen": stamps, "impact": -0.8, "confidence": 0.9, "assets": "BTC",
+            "cluster": [str(i) for i in range(len(stamps))], "prompt_version": scoring.PROMPT_VERSION,
+            "model": MODEL}
+    return pd.DataFrame({**rows, **over})
+
+
+def nightly(close: pd.Series, scored: pd.DataFrame, levels: pd.DataFrame, coin: str) -> list[dict[str, Any]]:
+    return scored_news_studies(close, scored, levels, coin, MODEL)
+
+
+def study(rows: list[dict[str, Any]], test: str, horizon: int = 4) -> dict[str, Any]:
+    return next(r for r in rows if r["test"] == test and r["horizon_hours"] == horizon)
+
+
+INDEX = pd.date_range("2026-01-01", periods=3000, freq="1h", tz="UTC")
+STAMPS = INDEX[50:2900:50] + pd.Timedelta("30min")
+EMPTY = pd.DataFrame()
+
+
+def test_studies_without_data_say_so() -> None:
+    rows = nightly(pd.Series(100.0, index=INDEX), EMPTY, EMPTY, "btc")
+    assert len(rows) == 8 and all(r["status"] == "not_enough_data" for r in rows)
+
+
+def test_studies_find_a_real_effect_of_bad_ratings() -> None:
+    rows = nightly(falling_after(STAMPS, INDEX), rated(STAMPS), EMPTY, "btc")
+    bad = study(rows, "llm_bad_news")
+    assert bad["status"] == "tested" and bad["mean_after"] < bad["base_mean"] and bad["q_value"] < 0.05
+
+
+def test_studies_use_the_time_the_bot_knew() -> None:
+    late = rated(STAMPS + pd.Timedelta("5h"), published=STAMPS)
+    bad = study(nightly(falling_after(STAMPS, INDEX), late, EMPTY, "btc"), "llm_bad_news")
+    assert bad["mean_after"] > study(nightly(falling_after(STAMPS, INDEX), rated(STAMPS), EMPTY,
+                                                         "btc"), "llm_bad_news")["mean_after"]
+
+
+@pytest.mark.parametrize("over", [{"assets": "ETH"}, {"confidence": 0.2}, {"impact": -0.3},
+                                  {"prompt_version": "old"}, {"model": "fallback-model"}])
+def test_studies_skip_other_markets_weak_ratings_and_old_prompts(over: dict[str, Any]) -> None:
+    rows = nightly(falling_after(STAMPS, INDEX), rated(STAMPS, **over), EMPTY, "btc")
+    assert study(rows, "llm_bad_news")["n"] == 0
+
+
+def test_crypto_wide_ratings_count_for_each_coin() -> None:
+    rows = nightly(falling_after(STAMPS, INDEX), rated(STAMPS, assets="CRYPTO"), EMPTY, "eth")
+    assert study(rows, "llm_bad_news")["n"] > 0
+
+
+def test_a_story_told_many_times_is_one_event() -> None:
+    close = falling_after(STAMPS, INDEX)
+    rows = nightly(close, rated(STAMPS, cluster="same"), EMPTY, "btc")
+    assert study(rows, "llm_bad_news")["n"] <= 1
+
+
+def test_filter_study_counts_only_hours_that_cut_a_side_and_were_not_stale() -> None:
+    levels = pd.DataFrame({"ts": STAMPS, "scope": "BTC", "long_mult": 0.5, "short_mult": 1.0,
+                           "stale": False})
+    close = falling_after(STAMPS, INDEX)
+    rows = nightly(close, EMPTY, levels, "btc")
+    assert study(rows, "filter_cut_longs")["status"] == "tested"
+    assert study(rows, "filter_cut_shorts")["n"] == 0
+    stale = nightly(close, EMPTY, levels.assign(stale=True), "btc")
+    assert study(stale, "filter_cut_longs")["n"] == 0
+
+
+def test_research_survives_missing_news_files() -> None:
+    scored, levels = _news_tables(MemoryStore())
+    assert scored.empty and levels.empty

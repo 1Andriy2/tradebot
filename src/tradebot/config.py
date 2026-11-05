@@ -47,7 +47,7 @@ class RiskParams(BaseModel):
 class NewsConfig(BaseModel):
     """Free LLM models and limits for the news risk filter (see tradebot.news)."""
 
-    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_model: str = "gemini-3.1-flash-lite"
     groq_model: str = "openai/gpt-oss-120b"
     max_items_per_run: int = Field(40, gt=0)
     max_items_per_day: int = Field(500, gt=0)

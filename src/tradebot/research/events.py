@@ -12,8 +12,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from tradebot.news.risk import MIN_CONFIDENCE, SCOPES
+from tradebot.news.scoring import PROMPT_VERSION
+
 MIN_EVENTS = 30
 N_SIMS = 2000
+STRONG_IMPACT = 0.5
 
 
 def event_study(close: pd.Series, events: pd.Series, horizon: int, seed: int = 0) -> dict[str, Any]:
@@ -83,6 +87,45 @@ def news_studies(close: pd.Series, news: pd.DataFrame, coin: str,
                 continue
             events = pd.Series(True, index=hours[mask.to_numpy()].unique())
             out.append({"test": name, **event_study(close, events, horizon)})
+    add_q_values(out)
+    return out
+
+
+def _hours(stamps: pd.Series) -> pd.Series:
+    """Marks the first hourly close after each moment. A 10:30 event is usable at 11:00, not 10:00."""
+    if stamps.empty:
+        return pd.Series(dtype=bool)
+    return pd.Series(True, index=pd.DatetimeIndex(stamps).ceil("1h").unique())
+
+
+def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataFrame, coin: str, model: str,
+                        horizons: tuple[int, ...] = (4, 24)) -> list[dict[str, Any]]:
+    """Does price move after the model's strong ratings, and after the filter cuts a side?
+
+    Time is ``first_seen``, when the bot really knew. Each story counts once, and only scores from
+    the current prompt and ``model`` count, because other scores are not comparable: the fallback
+    model rates the same news differently. Levels mix both models, as the bot would have seen them.
+    This is the test the filter must pass before it may touch the demo account.
+    """
+    scope = coin.upper()
+    tests: dict[str, pd.Series] = {}
+    if len(scored):
+        mine = scored[(scored["prompt_version"] == PROMPT_VERSION) & (scored["model"] == model)
+                      & (scored["confidence"] >= MIN_CONFIDENCE)
+                      & scored["assets"].map(lambda a: bool(SCOPES[scope] & set(a.split(",")))).astype(bool)]
+        mine = mine.sort_values("first_seen").drop_duplicates("cluster")
+        tests["llm_bad_news"] = _hours(mine.loc[mine["impact"] <= -STRONG_IMPACT, "first_seen"])
+        tests["llm_good_news"] = _hours(mine.loc[mine["impact"] >= STRONG_IMPACT, "first_seen"])
+    if len(levels):
+        mine = levels[(levels["scope"] == scope) & ~levels["stale"].astype(bool)]
+        tests["filter_cut_longs"] = _hours(mine.loc[mine["long_mult"] < 1, "ts"])
+        tests["filter_cut_shorts"] = _hours(mine.loc[mine["short_mult"] < 1, "ts"])
+    out = []
+    for name in ("llm_bad_news", "llm_good_news", "filter_cut_longs", "filter_cut_shorts"):
+        for horizon in horizons:
+            study = event_study(close, tests[name], horizon) if name in tests \
+                else {"status": "not_enough_data", "n": 0, "horizon_hours": horizon}
+            out.append({"test": name, **study})
     add_q_values(out)
     return out
 

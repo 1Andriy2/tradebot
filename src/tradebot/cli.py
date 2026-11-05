@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import io
 import logging
 import sys
 from pathlib import Path
@@ -157,12 +158,27 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _study_events(settings: Settings, now: pd.Timestamp) -> list[dict[str, Any]]:
-    """Tests of the liquidation idea on whatever has been collected so far."""
+def _news_tables(store: Store) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Scored news and risk levels, read only: the news job owns these files."""
+    from tradebot.news.pipeline import BUCKET, RISK_FILE, SCORED_FILE
+
+    tables = []
+    for name in (SCORED_FILE, RISK_FILE):
+        try:
+            tables.append(pd.read_parquet(io.BytesIO(store.download(BUCKET, name))))
+        except Exception as exc:  # studies of everything else do not depend on this
+            log.warning("no %s: %s", name, type(exc).__name__)
+            tables.append(pd.DataFrame())
+    return tables[0], tables[1]
+
+
+def _study_events(settings: Settings, store: Store, now: pd.Timestamp) -> list[dict[str, Any]]:
+    """Tests of the liquidation and news ideas on whatever has been collected so far."""
     from tradebot.data.market_stats import hourly_liquidations, liquidations_path, stats_path
     from tradebot.data.news import news_path
-    from tradebot.research.events import liquidation_studies, news_studies
+    from tradebot.research.events import liquidation_studies, news_studies, scored_news_studies
 
+    scored, levels = _news_tables(store)
     path = news_path(settings.data_path)
     news = pd.read_parquet(path) if path.exists() else pd.DataFrame()
     rows = []
@@ -174,7 +190,9 @@ def _study_events(settings: Settings, now: pd.Timestamp) -> list[dict[str, Any]]
         close = load_cached(settings.data_path, symbol, "1h")["close"]
         coin = symbol.split("/")[0].lower()
         studies = liquidation_studies(close, hourly_liquidations(liquidations), stats)
-        for study in studies + news_studies(close, news, coin):
+        studies += news_studies(close, news, coin)
+        studies += scored_news_studies(close, scored, levels, coin, settings.news.gemini_model)
+        for study in studies:
             rows.append({"ts": now, "type": "event_study", "message": f"{symbol} {study['test']}",
                          "details": {"symbol": symbol, **study}})
     return rows
@@ -215,7 +233,7 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     for s in settings.markets.symbols:
         patterns += scan_seasonality(load_cached(settings.data_path, s, "1h"), s)
     store.insert("patterns", [{"run_id": run_id, "created_at": now, **p} for p in patterns])
-    store.insert("events", _scenario_events(dfs, now) + _study_events(settings, now))
+    store.insert("events", _scenario_events(dfs, now) + _study_events(settings, store, now))
     best = sorted(results, key=lambda r: r["metrics"]["dsr"], reverse=True)[:10]
     for r in best:
         m = r["metrics"]
