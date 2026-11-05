@@ -71,8 +71,8 @@ Results are `news_scored.parquet` and `news_risk.parquet` in the `data` bucket, 
 cache sync. Level changes are events of type `news_risk`.
 
 5. **Test** — `news_<agent>` is a shadow twin of the champion, and of `buy_hold` and `ma_cross`: the same
-   signal, scaled by the level in force when each bar closed. Compare a twin with its original from the
-   twin's first bar. `news_buy_hold` is the clean one. The demo account never reads the levels.
+   signal, with the position scaled by the level in force when each bar closed. Compare a twin with its
+   original from the twin's first bar. The demo account never reads the levels.
 6. **Read** — the dashboard's `/news` page shows levels and rated stories from `news_levels` and
    `news_items`.
 

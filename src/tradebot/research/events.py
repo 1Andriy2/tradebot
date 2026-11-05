@@ -78,7 +78,7 @@ def news_studies(close: pd.Series, news: pd.DataFrame, coin: str,
     """Does price move after hours with good or bad headlines about ``coin``?"""
     out = []
     about = news[news[coin]] if len(news) else news
-    hours = pd.DatetimeIndex(about["published"]).ceil("1h") if len(about) else None
+    hours = pd.DatetimeIndex(about["published"]).floor("1h") if len(about) else None
     for name, mask in (("good_news", about["tone"] > 0), ("bad_news", about["tone"] < 0)) if len(about) \
             else (("good_news", None), ("bad_news", None)):
         for horizon in horizons:
@@ -92,10 +92,11 @@ def news_studies(close: pd.Series, news: pd.DataFrame, coin: str,
 
 
 def _hours(stamps: pd.Series) -> pd.Series:
-    """Marks the first hourly close after each moment. A 10:30 event is usable at 11:00, not 10:00."""
+    """Marks the first candle that closes after each moment. Candles are labelled by their open, so
+    a 10:30 event is first usable at the close of the candle labelled 10:00."""
     if stamps.empty:
         return pd.Series(dtype=bool)
-    return pd.Series(True, index=pd.DatetimeIndex(stamps).ceil("1h").unique())
+    return pd.Series(True, index=pd.DatetimeIndex(stamps).floor("1h").unique())
 
 
 def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataFrame, coin: str, model: str,

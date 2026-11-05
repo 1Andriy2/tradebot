@@ -25,7 +25,7 @@ FIRST_MONTH = pd.Period("2026-11", "M")
 
 def is_missing(exc: Exception) -> bool:
     """True for a file that does not exist yet, which is not the same as a failed download."""
-    return isinstance(exc, KeyError) or "not found" in str(exc).lower()
+    return isinstance(exc, KeyError) or str(getattr(exc, "status", "")) == "404"
 
 
 def read_file(store: Store, name: str) -> pd.DataFrame | None:

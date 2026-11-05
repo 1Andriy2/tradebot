@@ -45,10 +45,8 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
 }
 
 DEFAULT_CHAMPION = "ma_cross"
-# A twin of a mostly flat champion would show the filter nothing, so two steady agents get one too.
-# buy_hold is always long, which makes its twin the clean test of cutting longs. ma_cross also goes
-# short, but a level change alters its signal and so ends the wait after a stop: part of the
-# difference from its twin comes from that, not from the news.
+# A twin of a mostly flat champion would show the filter nothing, so two steady agents get one too:
+# buy_hold is always long, and ma_cross goes short as well.
 NEWS_REFERENCES = ("buy_hold", "ma_cross")
 
 

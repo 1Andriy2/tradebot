@@ -36,6 +36,8 @@ MAX_AGE = pd.Timedelta("24h")  # older than this on first sight: not news any mo
 RETRY_FOR = pd.Timedelta("6h")  # an item the model never answered for stops being worth a call
 SAME_STORY_WINDOW = pd.Timedelta("48h")
 STALE_AFTER = pd.Timedelta("1h")  # scoring this far behind means the risk level cannot be trusted
+STALE_BACKLOG = 5  # a few items the model will not answer must not switch the whole filter off
+REPUBLISH = pd.Timedelta("6h")  # a failed write to the page's tables is repaired within this time
 # GDELT finds about 20 new stories a run, which alone would use the daily budget in hours and leave
 # official sources waiting. Repeats stay free, so outlets can still confirm a story.
 GEO_STORIES_PER_RUN = 3
@@ -163,14 +165,19 @@ def rated_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return frame[frame["status"].isin([SCORED, DUPLICATE])]
 
 
-def publish(store: Store, frame: pd.DataFrame, clusters: set[str], report: NewsRun) -> None:
-    """Update the page's tables. The Parquet files are the record, so a failure here stops nothing."""
+def publish(store: Store, frame: pd.DataFrame, report: NewsRun, now: pd.Timestamp) -> None:
+    """Update the page's tables. The Parquet files are the record, so a failure here stops nothing.
+
+    Recent stories go again each run, so a write that failed once does not lose them for good.
+    """
+    recent = set(frame.loc[frame["scored_at"] > now - REPUBLISH, "cluster"])
     levels = [{**{k: r[k] for k in LEVEL_FIELDS}, "updated_at": r["ts"]} for r in report.risk]
-    try:
-        store.upsert("news_items", page_rows(frame, clusters), on_conflict="cluster")
-        store.upsert("news_levels", levels, on_conflict="scope")
-    except Exception as exc:
-        log.warning("news page tables not updated: %s", type(exc).__name__)
+    for table, rows, key in (("news_items", page_rows(frame, report.touched | recent), "cluster"),
+                             ("news_levels", levels, "scope")):
+        try:
+            store.upsert(table, rows, on_conflict=key)
+        except Exception as exc:
+            log.warning("%s not updated: %s", table, type(exc).__name__)
 
 
 def level_changes(previous: pd.DataFrame, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -199,7 +206,7 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
 
     pending = frame[frame["status"] == PENDING]
     waiting = pending[pending["kind"] != "geo"]  # the loud source going unread is not a blind spot
-    behind = bool((waiting["first_seen"] < now - STALE_AFTER).any())
+    behind = int((waiting["first_seen"] < now - STALE_AFTER).sum()) >= STALE_BACKLOG
     touched = set(frame.loc[list(answers), "cluster"]) | set(fresh["cluster"])
     report = NewsRun(counts, new=len(fresh), scored=len(answers), pending=len(pending), touched=touched)
     stale = behind or report.sources_ok == 0
@@ -232,7 +239,7 @@ def run(data_dir: Path, store: Store, sources: dict[str, Source], providers: lis
     risk = pd.read_parquet(risk_path) if risk_path.exists() else pd.DataFrame()
 
     scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch)
-    publish(store, scored, report.touched, report)
+    publish(store, scored, report, now)
     scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
     risk = rotate(store, RISK_STEM, risk, "ts", now)
     scored.to_parquet(scored_path)

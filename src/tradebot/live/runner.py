@@ -23,7 +23,7 @@ from tradebot.agents import DEFAULT_CHAMPION, NEWS_REFERENCES, Agent, all_agents
 from tradebot.config import Settings
 from tradebot.data.history import fetch_ohlcv_range
 from tradebot.exchange.venue import Venue
-from tradebot.news.gate import apply_levels, load_levels
+from tradebot.news.gate import exposure_scale, load_levels
 from tradebot.paper import EPS, PaperBook
 from tradebot.policy import DecisionPolicy, PolicyState
 from tradebot.risk import RiskManager
@@ -146,15 +146,7 @@ class Trader:
         return df
 
     def _signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
-        """The agent's signal on the step's bars, behind the news filter if it is the twin."""
-        signal = self._plain_signal(agent, symbol, df)
-        if not agent.news_gated:
-            return signal
-        bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
-        return apply_levels(signal, self.news_levels, symbol.split("/")[0], bar)
-
-    def _plain_signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
-        """From a longer history if the agent needs one."""
+        """The agent's signal on the step's bars, from a longer history if it needs one."""
         need = agent.strategy.history_bars
         if need <= LOOKBACK_BARS:
             return agent.strategy.signal(df)
@@ -164,6 +156,12 @@ class Trader:
             since = int(self.public.milliseconds()) - need * step_ms
             self._long_history[key] = fetch_ohlcv_range(self.public, symbol, self.tf, since)
         return agent.strategy.signal(self._long_history[key]).reindex(df.index, method="ffill")
+
+    def _news_scale(self, agent: Agent, symbol: str, signal: pd.Series) -> pd.Series:
+        if not agent.news_gated:
+            return pd.Series(1.0, index=signal.index)
+        bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
+        return exposure_scale(signal, self.news_levels, symbol.split("/")[0], bar)
 
     # ---------- state ----------
 
@@ -205,14 +203,16 @@ class Trader:
         decisions = []
         o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
         sig_v, atr_v = signal.to_numpy(float), atr.to_numpy(float)
+        scale_v = self._news_scale(agent, symbol, signal).to_numpy(float)
         for i in range(len(df) - len(new), len(df)):  # new bars are the tail of df
             ts = df.index[i]
             bar = Bar(ts, ts.date(), o[i], h[i], lo[i], c[i], float(sig_v[i]),
-                      float(atr_v[i - 1]) if i > 0 else float("nan"))
+                      float(atr_v[i - 1]) if i > 0 else float("nan"), scale=float(scale_v[i]))
             before = book.units
             decision = step_bar(book, state, policy, bar, agent.strategy.uses_stops)
             after = decision.target_units if decision else book.units
-            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, bar.signal, before,
+            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol,
+                                                bar.signal * bar.scale + 0.0, before,
                                                 after, decision.reason if decision else "no_change"))
         self._flush(agent.id, "shadow", symbol, state, book)
         self.store.insert("decisions", decisions)

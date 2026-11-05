@@ -4,6 +4,7 @@ import io
 import json
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +104,7 @@ def test_federal_register() -> None:
                          "html_url": "https://www.federalregister.gov/d/1"}]}
     (row,) = sources.parse_federal_register(json.dumps(body).encode(), "fr_president", NOW)
     assert row["kind"] == sources.OFFICIAL and row["title"] == "Sanctions order"
+    assert row["published"] == NOW  # a bare date must not age a document found just now
 
 
 def gkg(*lines: tuple[str, str, str]) -> bytes:
@@ -174,6 +176,19 @@ def test_telegram_preview() -> None:
     <time datetime="2026-11-05T11:22:30+00:00" class="time"></time></div>"""
     (row,) = sources.parse_telegram(page, "WatcherGuru", NOW)
     assert row["title"] == "JUST IN: SEC sues exchange" and row["url"] == "https://t.me/WatcherGuru/15834"
+
+
+@pytest.mark.parametrize("error", [StopIteration(), zlib.error("bad"), EOFError(), RuntimeError("x")])
+def test_any_failure_in_a_source_stays_in_that_source(error: Exception) -> None:
+    def broken(fetch: sources.Fetch, now: pd.Timestamp) -> list[sources.Item]:
+        raise error
+
+    assert sources.collect({"a": broken}, NOW) == ([], {"a": -1})
+
+
+def test_gdelt_with_no_file_listed_fails_alone() -> None:
+    items, counts = sources.collect({"gdelt": sources._gdelt}, NOW, lambda url: b"maintenance")
+    assert items == [] and counts == {"gdelt": -1}
 
 
 def test_one_failed_source_does_not_stop_the_rest() -> None:
@@ -457,10 +472,26 @@ def test_items_the_model_never_answered_expire() -> None:
     assert again.iloc[0]["status"] == pipeline.EXPIRED and report.scored == 0
 
 
-def test_falling_behind_marks_the_level_unknown() -> None:
-    frame, _, _ = run_once([news_item("SEC sues Binance", "https://x.example/1")], [])
-    _, _, report = run_once([], [], frame, now=NOW + pd.Timedelta("2h"))
+def unscored(count: int) -> pd.DataFrame:
+    topics = ["miners", "banks", "wallets", "lawsuits", "outflows", "futures"][:count]
+    frame, _, _ = run_once([news_item(f"Bitcoin {t}", f"https://x.example/{t}") for t in topics], [])
+    return frame
+
+
+def test_a_real_backlog_marks_the_level_unknown() -> None:
+    _, _, report = run_once([], [], unscored(pipeline.STALE_BACKLOG), now=NOW + pd.Timedelta("2h"))
     assert all(r["level"] == risk.UNKNOWN for r in report.risk)
+
+
+def test_an_item_the_model_never_answers_does_not_switch_the_filter_off() -> None:
+    def skips_one(system: str, user: str) -> str:
+        return answering(-0.9).complete(system, json.dumps(json.loads(user)[1:]))
+
+    items = [news_item("Bitcoin miners", "https://x.example/1"), news_item("SEC sues exchange", "https://x.example/2")]
+    frame, _, _ = run_once(items, [scoring.Provider("m", skips_one)])
+    _, _, report = run_once([], [scoring.Provider("m", lambda s, u: '{"results": []}')], frame,
+                            now=NOW + pd.Timedelta("90min"))
+    assert report.pending == 1 and all(r["level"] != risk.UNKNOWN for r in report.risk)
 
 
 def test_all_sources_down_marks_the_level_unknown() -> None:
@@ -545,11 +576,25 @@ def test_a_failed_download_never_replaces_history_with_an_empty_table(tmp_path: 
 
 
 def test_a_missing_file_starts_empty(tmp_path: Path) -> None:
+    class Missing(Exception):
+        status = "404"  # as storage3 reports it
+
     class Fresh(MemoryStore):
         def download(self, bucket: str, path: str) -> bytes:
-            raise RuntimeError("{'statusCode': 404, 'message': 'Object not found'}")
+            raise Missing
 
     assert pipeline.run(tmp_path, Fresh(), static([]), [], CFG, NOW).new == 0
+
+
+def test_an_outage_that_merely_says_not_found_is_still_an_outage(tmp_path: Path) -> None:
+    class Flaky(MemoryStore):
+        def download(self, bucket: str, path: str) -> bytes:
+            raise RuntimeError("Unable to parse error message: tenant not found")
+
+    store = Flaky()
+    with pytest.raises(RuntimeError):
+        pipeline.run(tmp_path, store, static([]), [], CFG, NOW)
+    assert store.files == {}
 
 
 def test_nightly_sync_leaves_these_files_alone(tmp_path: Path) -> None:
@@ -589,12 +634,31 @@ def test_a_run_updates_only_the_stories_it_touched(tmp_path: Path) -> None:
     first = news_item("SEC sues Binance", "https://x.example/1")
     pipeline.run(tmp_path, store, static([first]), [answering()], CFG, NOW)
     store.tables["news_items"][0]["title"] = "kept"
-    later = NOW + pd.Timedelta("15min")
-    second = {**news_item("Bitcoin miners sell reserves", "https://x.example/2"), "first_seen": later}
+    later = NOW + pd.Timedelta("7h")
+    second = {**news_item("Bitcoin miners sell reserves", "https://x.example/2", published=later),
+              "first_seen": later}
     pipeline.run(tmp_path, store, static([first, second]), [answering()], CFG, later)
     assert [r["title"] for r in store.tables["news_items"]] == ["kept", second["title"]]
     assert {r["scope"] for r in store.tables["news_levels"]} == {"BTC", "ETH", "STOCKS"}
     assert len(store.tables["news_levels"]) == 3
+
+
+def test_a_failed_page_write_is_repaired_by_the_next_run(tmp_path: Path) -> None:
+    class Down(MemoryStore):
+        down = True
+
+        def upsert(self, table: str, rows: list[dict[str, Any]], on_conflict: str) -> None:
+            if self.down and table == "news_items":
+                raise RuntimeError("503")
+            super().upsert(table, rows, on_conflict)
+
+    store = Down()
+    item = news_item("SEC sues Binance", "https://x.example/1")
+    pipeline.run(tmp_path, store, static([item]), [answering()], CFG, NOW)
+    assert not store.tables["news_items"] and len(store.tables["news_levels"]) == 3
+    store.down = False
+    pipeline.run(tmp_path, store, static([item]), [answering()], CFG, NOW + pd.Timedelta("15min"))
+    assert len(store.tables["news_items"]) == 1
 
 
 def test_a_failed_page_update_does_not_stop_the_run(tmp_path: Path) -> None:
@@ -699,7 +763,7 @@ MODEL = "primary-model"
 def falling_after(stamps: pd.DatetimeIndex, index: pd.DatetimeIndex) -> pd.Series:
     returns = np.random.default_rng(1).normal(0, 0.003, len(index))
     for stamp in stamps:
-        i = index.get_loc(stamp.ceil("1h"))
+        i = index.get_loc(stamp.floor("1h"))
         returns[i + 1: i + 5] -= 0.006
     return pd.Series(100 * np.exp(np.cumsum(returns)), index=index)
 

@@ -96,12 +96,12 @@ def test_news_studies_without_data() -> None:
 
 
 def test_news_studies_use_the_hour_after_publication() -> None:
-    """A headline at 10:30 is first usable at the 11:00 close, never at the 10:00 one."""
+    """A headline at 10:30 is first usable at the 11:00 close: the candle labelled 10:00."""
     idx = pd.date_range("2026-01-01", periods=3000, freq="1h", tz="UTC")
     r = np.random.default_rng(1).normal(0, 0.003, 3000)
     stamps = idx[50:2900:50] + pd.Timedelta("30min")
     for t in stamps:
-        i = idx.get_loc(t.ceil("1h"))
+        i = idx.get_loc(t.floor("1h"))
         r[i + 1: i + 5] -= 0.006
     close = pd.Series(100 * np.exp(np.cumsum(r)), index=idx)
     news = pd.DataFrame({"published": stamps, "btc": True, "eth": False, "tone": -1})

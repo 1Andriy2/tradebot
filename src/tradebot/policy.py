@@ -18,6 +18,7 @@ RISK_CAP = "risk_cap"
 class PolicyState:
     risk: RiskState
     prev_sig: float = 0.0
+    prev_scale: float = 1.0
     suppressed_sig: float | None = None  # after a stop, wait for the signal to change
     sl: float | None = None
     tp: float | None = None
@@ -37,7 +38,8 @@ class PolicyState:
         for key in ("day", "halted_day"):
             r[key] = date.fromisoformat(r[key]) if r.get(key) else None
         r["events"] = []
-        return cls(risk=RiskState(**r), prev_sig=d["prev_sig"], suppressed_sig=d["suppressed_sig"],
+        return cls(risk=RiskState(**r), prev_sig=d["prev_sig"], prev_scale=d.get("prev_scale", 1.0),
+                   suppressed_sig=d["suppressed_sig"],
                    sl=d.get("sl"), tp=d.get("tp"), extra=d.get("extra", {}))
 
 
@@ -59,9 +61,14 @@ class DecisionPolicy:
         state.sl = state.tp = None
 
     def decide(
-        self, state: PolicyState, day: date, equity: float, signal: float, price: float, units: float
+        self, state: PolicyState, day: date, equity: float, signal: float, price: float, units: float,
+        scale: float = 1.0,
     ) -> Decision | None:
-        """Called at a bar close. Returns a new target, or None to keep the current position."""
+        """Called at a bar close. Returns a new target, or None to keep the current position.
+
+        ``scale`` shrinks the position, not the signal, so a change in it cannot end the wait after
+        a stop and open a position the strategy itself would not hold.
+        """
         signal = max(-1.0, min(1.0, signal))
         block = self.risk.check(state.risk, day, equity)
         if state.suppressed_sig is not None and signal != state.suppressed_sig:
@@ -71,10 +78,11 @@ class DecisionPolicy:
         if block:
             target, reason = 0.0, block
         elif state.suppressed_sig is None and (
-            signal != state.prev_sig or (abs(units) < EPS and signal != 0)
+            signal != state.prev_sig or scale != state.prev_scale or (abs(units) < EPS and signal != 0)
         ):
-            target = self.risk.target_units(signal, equity, price)
+            target = self.risk.target_units(signal * scale, equity, price)
         state.prev_sig = signal
+        state.prev_scale = scale
         # Hard cap on every bar: a position may outgrow the cap (equity drop, price move,
         # external change); trim it back instead of waiting for a signal change.
         lim = self.risk.limits

@@ -19,7 +19,6 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
 import pandas as pd
 
 from tradebot.data.news import FEEDS, fetch_feed
@@ -62,9 +61,6 @@ PLACEHOLDER = re.compile(r"^(image |video )?post from ", re.I)
 TELEGRAM_POST = re.compile(r'data-post="([\w/]+)"')
 TELEGRAM_TIME = re.compile(r'<time datetime="([^"]+)"')
 TELEGRAM_TEXT = re.compile(r'tgme_widget_message_text[^>]*>(.*?)</div>', re.S)
-
-SOURCE_ERRORS = (httpx.HTTPError, ET.ParseError, ValueError, KeyError, TypeError, IndexError,
-                 AttributeError, zipfile.BadZipFile)
 
 
 def clean(text: str | None) -> str:
@@ -117,8 +113,10 @@ def parse_feed(content: bytes, source: str, kind: str, seen_at: pd.Timestamp) ->
 
 
 def parse_federal_register(content: bytes, source: str, seen_at: pd.Timestamp) -> list[Item]:
-    rows = [make_item(parse_time(d.get("publication_date")), seen_at, source, OFFICIAL, d.get("title"),
-                      d.get("html_url")) for d in json.loads(content)["results"]]
+    """These carry a date with no time, and midnight would make today's document look half a day
+    old. The query looks back only two days, so the time of first sight is close enough."""
+    rows = [make_item(seen_at, seen_at, source, OFFICIAL, d.get("title"), d.get("html_url"))
+            for d in json.loads(content)["results"]]
     return [r for r in rows if r]
 
 
@@ -224,8 +222,8 @@ def collect(sources: dict[str, Source], now: pd.Timestamp,
     for name, source in sources.items():
         try:
             found = source(fetch, now)
-        except SOURCE_ERRORS as exc:
-            log.warning("news source %s failed: %s", name, exc)
+        except Exception as exc:  # outside data can fail in any way, and must stop only this source
+            log.warning("news source %s failed: %s %s", name, type(exc).__name__, exc)
             counts[name] = -1
             continue
         counts[name] = len(found)

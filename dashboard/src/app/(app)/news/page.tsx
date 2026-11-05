@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, ErrorNote, PageTitle } from "@/components/ui";
 import {
   ago, ASSETS, assetList, byDay, CHANNELS, EVENT_TYPES, fmtClock, fmtImpact, LEVELS, outletName, safeUrl,
@@ -11,6 +11,8 @@ import { useNow } from "@/lib/useNow";
 import { useRows } from "@/lib/useRows";
 
 const DAYS = 7;
+const MAX_STORIES = DAYS * 500; // the news job scores at most 500 a day, so this never cuts the week
+const LEVEL_MAX_AGE_MS = 3_600_000; // the same limit the test agents apply
 const SCOPE_ORDER = ["BTC", "ETH", "STOCKS"];
 
 const VIEWS: Record<string, { label: string; test: (i: NewsItemRow) => boolean }> = {
@@ -63,7 +65,8 @@ function Pressure({ label, value, color }: { label: string; value: number; color
 }
 
 function LevelCard({ row, now }: { row: NewsLevelRow; now: number }) {
-  const level = LEVELS[row.level] ?? LEVELS.unknown;
+  const expired = now > 0 && now - new Date(row.updated_at).getTime() > LEVEL_MAX_AGE_MS;
+  const level = expired ? LEVELS.unknown : LEVELS[row.level] ?? LEVELS.unknown;
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-baseline justify-between gap-2">
@@ -156,9 +159,24 @@ export default function NewsPage() {
   const [query, setQuery] = useState("");
 
   const news = useRows<NewsItemRow>("news_items", {
-    order: { column: "first_seen" }, limit: 1500, sinceDays: { column: "first_seen", days: DAYS }, realtime: true,
+    order: { column: "first_seen" }, limit: MAX_STORIES, sinceDays: { column: "first_seen", days: DAYS },
   });
   const levels = useRows<NewsLevelRow>("news_levels", { realtime: true });
+
+  // Stories are the heavy table: refetch them once per news run, and only for a tab someone is looking at.
+  const { reload } = news;
+  const updatedAt = levels.rows.map((r) => r.updated_at).sort().at(-1);
+  const loadedFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const refresh = () => {
+      if (!updatedAt || updatedAt === loadedFor.current || document.visibilityState !== "visible") return;
+      if (loadedFor.current) void reload();
+      loadedFor.current = updatedAt;
+    };
+    refresh();
+    document.addEventListener("visibilitychange", refresh);
+    return () => document.removeEventListener("visibilitychange", refresh);
+  }, [updatedAt, reload]);
 
   const topics = useMemo(() => [...new Set(news.rows.map((i) => i.event_type))].sort(), [news.rows]);
   const shown = useMemo(() => {

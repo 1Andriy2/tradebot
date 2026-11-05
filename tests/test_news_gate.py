@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from datetime import date
 
 import numpy as np
 import pandas as pd
@@ -8,14 +9,17 @@ import pytest
 
 from tests.test_live import FakePublic, FakeVenue
 from tradebot.agents import Agent, news_twin
-from tradebot.config import Settings
+from tradebot.config import RiskParams, Settings
 from tradebot.live.runner import Trader
-from tradebot.news.gate import apply_levels
+from tradebot.news.gate import exposure_scale
 from tradebot.news.pipeline import BUCKET, RISK_FILE
+from tradebot.policy import DecisionPolicy, PolicyState
+from tradebot.risk import RiskManager
 from tradebot.store import MemoryStore
 from tradebot.strategies.base import Strategy
 
 BAR = pd.Timedelta("15min")
+DAY = date(2026, 11, 5)
 START = pd.Timestamp("2026-11-05 10:00", tz="UTC")
 INDEX = pd.date_range(START, periods=8, freq="15min")
 
@@ -40,6 +44,10 @@ def signal(value: float = 1.0) -> pd.Series:
     return pd.Series(value, index=INDEX)
 
 
+def apply_levels(raw: pd.Series, table: pd.DataFrame, scope: str, bar: pd.Timedelta) -> pd.Series:
+    return raw * exposure_scale(raw, table, scope, bar)
+
+
 def test_a_bar_sees_only_levels_written_before_it_closed() -> None:
     written = START + pd.Timedelta("31min")  # after the 10:15 bar closes at 10:30
     gated = apply_levels(signal(), levels(written), "BTC", BAR)
@@ -50,11 +58,6 @@ def test_longs_and_shorts_use_their_own_multiplier() -> None:
     table = levels(START, long_mult=0.5, short_mult=0.0)
     assert apply_levels(signal(0.8), table, "BTC", BAR).iloc[0] == pytest.approx(0.4)
     assert apply_levels(signal(-0.8), table, "BTC", BAR).iloc[0] == 0.0
-
-
-def test_a_cut_short_is_a_plain_zero() -> None:
-    gated = apply_levels(signal(-1.0), levels(START, short_mult=0.0), "BTC", BAR)
-    assert str(gated.iloc[0]) == "0.0"
 
 
 def test_the_latest_level_wins() -> None:
@@ -132,6 +135,45 @@ def test_the_demo_account_ignores_news_levels() -> None:
     bot.public.add_bar(100.0)
     bot.step()
     assert with_news.orders and with_news.orders == without_news.orders
+
+
+def stopped_policy() -> tuple[DecisionPolicy, PolicyState]:
+    policy = DecisionPolicy(RiskManager(RiskParams()))
+    state = policy.new_state(10_000.0)
+    state.prev_sig = 1.0
+    policy.on_stopped(state)
+    return policy, state
+
+
+@pytest.mark.parametrize("scale", [0.5, 0.0])
+def test_a_news_cut_cannot_end_the_wait_after_a_stop(scale: float) -> None:
+    """Regression: a scaled signal looked like a new signal, and opened a position."""
+    policy, state = stopped_policy()
+    assert policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0, scale) is None
+    assert state.suppressed_sig == 1.0
+
+
+def test_a_new_signal_still_ends_the_wait() -> None:
+    policy, state = stopped_policy()
+    assert policy.decide(state, DAY, 10_000.0, -1.0, 100.0, 0.0, 0.5) is not None
+
+
+def test_scale_shrinks_the_position_and_restores_it() -> None:
+    policy = DecisionPolicy(RiskManager(RiskParams()))
+    state = policy.new_state(10_000.0)
+    full = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0)
+    assert full is not None
+    half = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, full.target_units, 0.5)
+    assert half is not None and half.target_units == pytest.approx(full.target_units / 2)
+    back = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, half.target_units, 1.0)
+    assert back is not None and back.target_units == pytest.approx(full.target_units)
+
+
+def test_state_saved_before_scale_existed_still_loads() -> None:
+    policy, state = stopped_policy()
+    saved = state.to_dict()
+    del saved["prev_scale"]
+    assert PolicyState.from_dict(saved).prev_scale == 1.0
 
 
 def test_the_twin_never_trades_on_the_demo_account() -> None:
