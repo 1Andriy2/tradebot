@@ -54,8 +54,8 @@ def down(system: str, user: str) -> str:
 
 
 def scored_rows(*rows: dict[str, Any]) -> pd.DataFrame:
-    base = {"first_seen": NOW, "kind": "official", "impact": -1.0, "confidence": 1.0, "assets": "BTC",
-            "title": "t", "source": "a", "cluster": "c"}
+    base = {"first_seen": NOW, "published": NOW, "kind": "official", "impact": -1.0, "confidence": 1.0,
+            "assets": "BTC", "title": "t", "source": "a", "cluster": "c"}
     return pd.DataFrame([{**base, **row} for row in rows])
 
 
@@ -308,8 +308,20 @@ def test_a_repeated_story_counts_once_but_different_stories_add_up() -> None:
 
 
 def test_pressure_fades_with_a_six_hour_half_life() -> None:
-    old = scored_rows({"impact": -0.8, "first_seen": NOW - pd.Timedelta("6h")})
+    old = scored_rows({"impact": -0.8, "published": NOW - pd.Timedelta("6h"),
+                       "first_seen": NOW - pd.Timedelta("6h")})
     assert risk.side_pressure(old, NOW)[0] == pytest.approx(0.4)
+
+
+def test_backlog_found_late_still_counts_as_old_news() -> None:
+    found_now = scored_rows({"impact": -0.8, "published": NOW - pd.Timedelta("6h")})
+    assert risk.side_pressure(found_now, NOW)[0] == pytest.approx(0.4)
+
+
+def test_a_future_date_from_a_source_cannot_make_news_stronger() -> None:
+    forged = scored_rows({"impact": -0.8, "published": NOW + pd.Timedelta("48h"),
+                          "first_seen": NOW - pd.Timedelta("6h")})
+    assert risk.side_pressure(forged, NOW)[0] == pytest.approx(0.4)
 
 
 def test_bad_news_cuts_longs_only_and_good_news_cuts_shorts_only() -> None:
@@ -365,6 +377,14 @@ def test_item_is_scored_and_stamped_for_later_tests() -> None:
     assert report.scored == 1 and row["status"] == pipeline.SCORED and row["impact"] == -0.8
     assert row["assets"] == "BTC" and row["model"] == "fake-model"
     assert row["prompt_version"] == scoring.PROMPT_VERSION and row["scored_at"] == NOW
+
+
+def test_a_real_clock_with_microseconds_can_be_written() -> None:
+    """Regression: the first live run crashed here, and round test times had hidden it."""
+    now = pd.Timestamp("2026-11-05 19:47:26.426089", tz="UTC")
+    item = {**news_item("SEC sues Binance", "https://x.example/1"), "first_seen": now, "published": now}
+    frame, _, report = run_once([item], [answering()], now=now)
+    assert report.scored == 1 and frame.iloc[0]["scored_at"] == now
 
 
 def test_old_items_are_stored_but_never_scored() -> None:

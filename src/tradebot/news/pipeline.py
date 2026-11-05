@@ -67,7 +67,8 @@ def typed(frame: pd.DataFrame) -> pd.DataFrame:
     """Fixed columns and types, so empty and full frames concatenate alike."""
     out = frame.reindex(columns=COLUMNS)
     for col in TIMES:
-        out[col] = pd.to_datetime(out[col], utc=True)
+        # A column of only empty values would otherwise get a unit too coarse to hold real clocks.
+        out[col] = pd.to_datetime(out[col], utc=True).astype("datetime64[us, UTC]")
     for col in NUMBERS:
         out[col] = pd.to_numeric(out[col])
     for col in TEXTS:

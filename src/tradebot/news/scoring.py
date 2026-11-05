@@ -153,8 +153,8 @@ def _ask(providers: list[Provider], system: str,
         try:
             return parse_answer(provider.complete(system, user), ids), provider.model
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-            # The type only: an HTTP error text carries the request URL.
-            log.warning("model %s failed: %s", provider.model, type(exc).__name__)
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else ""
+            log.warning("model %s failed: %s %s", provider.model, type(exc).__name__, status)
     return {}, ""
 
 

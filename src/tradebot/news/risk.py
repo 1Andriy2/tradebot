@@ -41,7 +41,9 @@ def side_pressure(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float, int]:
     """
     if events.empty:
         return 0.0, 0
-    hours = (now - events["first_seen"]).dt.total_seconds() / 3600
+    # News ages from publication, or a day of backlog would look fresh on the run that finds it.
+    # A source's date can only make an item older: it is capped by when the bot first saw it.
+    hours = (now - events[["published", "first_seen"]].min(axis=1)).dt.total_seconds() / 3600
     weight = (events["impact"].abs() * events["confidence"] * events["kind"].map(KIND_WEIGHT).fillna(0.5)
               * 0.5 ** (hours / HALF_LIFE_HOURS))
     per_story = weight.groupby(events["cluster"]).max()
