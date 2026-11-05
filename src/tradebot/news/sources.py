@@ -62,7 +62,9 @@ PRICE_MARKET = re.compile(r"\b(price|above|below|up or down|hit \$|reach \$)", r
 GOOGLE_NEWS = "https://news.google.com/rss/search"
 YAHOO_NEWS = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 SEC_COMPANY = "https://www.sec.gov/cgi-bin/browse-edgar"
-COMPANY_WORDS = "inc|incorporated|corp|corporation|co|com|company|ltd|limited|plc|holdings|group|class [a-z]"
+# Legal forms, and the descriptive words headlines leave out: 'Palantir', not 'Palantir Technologies'.
+COMPANY_WORDS = ("inc|incorporated|corp|corporation|co|com|company|ltd|limited|plc|holdings?|group|"
+                 "n\\.?v|s\\.?a|ag|se|class [a-z]|technologies|technology|platforms|systems|motor")
 COMPANY_SUFFIX = re.compile(rf"[\s,&]+(?:{COMPANY_WORDS})\.?$|\.com$|\s*/[a-z]{{2}}/?$|[\s,&/]+$", re.I)
 
 TAG = re.compile(r"<[^>]+>")

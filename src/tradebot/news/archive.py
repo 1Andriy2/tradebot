@@ -57,9 +57,11 @@ def rotate(store: Store, stem: str, frame: pd.DataFrame, column: str, now: pd.Ti
     The archive is written before anything leaves ``frame``, so a failure loses nothing: the rows
     simply wait for the next run. Writing the same rows twice is harmless, they are de-duplicated.
     """
-    if frame.empty or frame[column].min() >= now - ROTATE_AFTER:
+    if frame.empty:
         return frame
     newest = frame.groupby(together)[column].transform("max") if together else frame[column]
+    if newest.min() >= now - ROTATE_AFTER:
+        return frame
     old = newest < now - HOT
     try:
         kept = worth_keeping(frame[old])

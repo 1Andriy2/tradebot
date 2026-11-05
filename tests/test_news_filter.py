@@ -253,10 +253,19 @@ def test_company_suffixes_are_dropped_from_the_search_name() -> None:
     ("AMAZON COM INC", "AMAZON"), ("MCDONALDS CORP", "MCDONALDS"), ("JPMorgan Chase & Co.", "JPMorgan Chase"),
     ("The Boeing Company", "Boeing"), ("Amazon.com, Inc.", "Amazon"),
     ("Mastercard Incorporated", "Mastercard"),
-    ("Alibaba Group Holding Limited", "Alibaba Group Holding"), ("McDonald's Corporation", "McDonald's"),
+    ("Alibaba Group Holding Limited", "Alibaba"), ("McDonald's Corporation", "McDonald's"),
+    ("ASML Holding N.V.", "ASML"), ("Spotify Technology S.A.", "Spotify"),
+    ("Palantir Technologies Inc.", "Palantir"),
+    ("Meta Platforms, Inc.", "Meta"), ("Cisco Systems, Inc.", "Cisco"), ("Ford Motor Company", "Ford"),
+    ("General Motors Company", "General Motors"),
 ])
 def test_real_company_titles_become_names_used_in_headlines(raw: str, expected: str) -> None:
     assert sources.search_name({"kind": "stock", "name": raw}) == expected
+
+
+def test_a_name_ending_in_punctuation_can_match() -> None:
+    assert filters.mentions("POL (ex-MATIC) jumps on upgrade", "POL (ex-MATIC)", "POL")
+    assert filters.mentions("Yum! raises its forecast", "Yum!", "YUM")
 
 
 def test_a_short_last_word_of_a_real_name_stays() -> None:
@@ -1133,6 +1142,15 @@ def test_a_story_leaves_the_hot_file_as_a_whole() -> None:
                                  LATER - pd.Timedelta("5h")], "story": ["a", "b", "a"]})
     hot = archive.rotate(store, "x", frame, "ts", LATER, together="story")
     assert list(hot["story"]) == ["a", "a"]
+
+
+def test_a_story_held_by_a_late_repeat_does_not_rotate_every_run() -> None:
+    """Regression: a held row kept the daily check open, moving the archive every 15 minutes."""
+    store = MemoryStore()
+    frame = pd.DataFrame({"ts": [LATER - pd.Timedelta("80h"), LATER - pd.Timedelta("40h")],
+                          "story": ["a", "a"]})
+    assert len(archive.rotate(store, "x", frame, "ts", LATER, together="story")) == 2
+    assert store.files == {}
 
 
 def test_a_failed_archive_keeps_every_row() -> None:

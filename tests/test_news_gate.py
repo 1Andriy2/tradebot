@@ -252,3 +252,31 @@ def test_a_corrupt_levels_file_does_not_stop_the_step() -> None:
     bot = trader(store)
     bot.public.add_bar(100.0)
     assert bot.step().errors == []
+
+
+def test_a_demo_equity_failure_does_not_lose_the_shadow_snapshots() -> None:
+    class Down(FakeVenue):
+        def equity(self) -> float:
+            raise RuntimeError("venue down")
+
+    store = MemoryStore()
+    bot = trader(store, Down())
+    bot.public.add_bar(100.0)
+    bot.step()
+    assert {r["agent_id"] for r in store.tables["equity_snapshots"]} >= {"ma_cross", "news_ma_cross"}
+    assert store.select("bot_status")
+
+
+def test_a_position_without_a_price_is_left_out_of_the_snapshot() -> None:
+    settings = Settings()
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    store = MemoryStore()
+    bot = Trader(settings, store, FakePublic(), None, [Agent("held", "baseline", Always())])
+    for _ in range(2):
+        bot.public.add_bar(100.0)
+        bot.step()
+    assert store.select("positions", {"agent_id": "held"})[0]["units"] != 0
+    store.tables["equity_snapshots"].clear()
+    bot.last_price.clear()
+    bot._snapshot_equity()
+    assert store.tables["equity_snapshots"] == []

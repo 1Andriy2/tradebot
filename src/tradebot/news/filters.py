@@ -62,7 +62,7 @@ def mentions(title: str, name: str, ticker: str) -> bool:
 
     # Both spellings of the headline: filings write MCDONALDS for McDonald's, while stripping the
     # apostrophe from "Apple's" would hide the name it contains.
-    pattern = rf"\b{re.escape(plain(name))}\b|{written}"
+    pattern = rf"(?<!\w){re.escape(plain(name))}(?!\w)|{written}"  # a name may end in punctuation
     return any(re.search(pattern, text, re.I) for text in (title, plain(title)))
 
 

@@ -429,11 +429,18 @@ class Trader:
                     total += self.slot_equity
                     continue
                 book = PaperBook.from_dict(row["state"]["book"], self.settings.costs)
-                total += book.equity(self.last_price.get(symbol, book.avg_entry))
-            rows.append({"ts": now, "agent_id": agent.id, "venue": "shadow", "equity": total})
+                if symbol not in self.last_price and abs(book.units) > EPS:
+                    total = float("nan")  # no price this step: a guess would draw a false jump
+                    break
+                total += book.equity(self.last_price.get(symbol, 0.0))
+            if total == total:
+                rows.append({"ts": now, "agent_id": agent.id, "venue": "shadow", "equity": total})
         if self.venue is not None:
-            rows.append({"ts": now, "agent_id": self._champion_id(), "venue": "demo",
-                         "equity": self.venue.equity()})
+            try:
+                rows.append({"ts": now, "agent_id": self._champion_id(), "venue": "demo",
+                             "equity": self.venue.equity()})
+            except Exception as exc:  # a demo-venue error never stops the shadow agents
+                log.warning("no demo equity this step: %s", type(exc).__name__)
         self.store.upsert("equity_snapshots", rows, on_conflict="agent_id,venue,ts")
 
     def _status(self, report: StepReport) -> None:
