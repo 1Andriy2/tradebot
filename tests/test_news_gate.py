@@ -150,10 +150,22 @@ def test_a_corrupt_levels_file_does_not_stop_the_step() -> None:
     assert bot.step().errors == []
 
 
-def test_no_twin_when_the_champion_is_not_loaded() -> None:
+def test_both_the_champion_and_the_reference_agent_get_a_twin() -> None:
+    store = MemoryStore()
+    store.upsert("champion", [{"id": 1, "agent_id": "rl"}], on_conflict="id")
+    settings = Settings()
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    agents = [Agent("ma_cross", "baseline", Always()), Agent("rl", "rl", Always(0.0))]
+    bot = Trader(settings, store, FakePublic(), None, agents)
+    bot.public.add_bar(100.0)
+    assert bot.step().errors == []
+    assert {a.id for a in bot.roster} == {"ma_cross", "rl", "news_ma_cross", "news_rl"}
+
+
+def test_a_champion_that_is_not_loaded_gets_no_twin() -> None:
     store = MemoryStore()
     store.upsert("champion", [{"id": 1, "agent_id": "gone"}], on_conflict="id")
     bot = trader(store)
     bot.public.add_bar(100.0)
     bot.step()
-    assert [a.id for a in bot.roster] == ["ma_cross"]
+    assert [a.id for a in bot.roster] == ["ma_cross", "news_ma_cross"]

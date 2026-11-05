@@ -46,7 +46,8 @@ def answering(impact: float = -0.8, assets: tuple[str, ...] = ("BTC",)) -> scori
     def complete(system: str, user: str) -> str:
         return json.dumps({"results": [
             {"id": row["id"], "subject": "SEC", "stance": "hostile", "impact": impact, "confidence": 0.9,
-             "channel": "direct", "event_type": "regulation", "assets": list(assets), "reason": "r"}
+             "channel": "direct", "event_type": "regulation", "assets": list(assets), "reason": "r",
+             "title_uk": "Заголовок"}
             for row in json.loads(user)]})
     return scoring.Provider("fake-model", complete)
 
@@ -547,6 +548,47 @@ def test_news_job_is_kept_away_from_exchange_keys() -> None:
 def test_cli_accepts_the_command() -> None:
     args = build_parser().parse_args(["news", "--check"])
     assert args.command == "news" and args.check
+
+
+# The dashboard's tables
+
+def test_page_shows_one_row_per_story_with_all_outlets() -> None:
+    items = [news_item("SEC sues Binance over securities", "https://a.example/1", source="coindesk"),
+             news_item("SEC sues Binance over securities today", "https://b.example/1", source="decrypt")]
+    frame, _, _ = run_once(items, [answering()])
+    (row,) = pipeline.page_rows(frame)
+    assert row["outlets"] == ["coindesk", "decrypt"] and row["title_uk"] == "Заголовок"
+    assert row["impact"] == -0.8 and row["url"] == "https://a.example/1"
+
+
+def test_unrated_items_stay_off_the_page() -> None:
+    frame, _, _ = run_once([news_item("SEC sues Binance", "https://x.example/1"),
+                            news_item("Local bakery opens", "https://x.example/2")], [])
+    assert pipeline.page_rows(frame) == []
+
+
+def test_a_run_updates_only_the_stories_it_touched(tmp_path: Path) -> None:
+    store = MemoryStore()
+    first = news_item("SEC sues Binance", "https://x.example/1")
+    pipeline.run(tmp_path, store, static([first]), [answering()], CFG, NOW)
+    store.tables["news_items"][0]["title"] = "kept"
+    later = NOW + pd.Timedelta("15min")
+    second = {**news_item("Bitcoin miners sell reserves", "https://x.example/2"), "first_seen": later}
+    pipeline.run(tmp_path, store, static([first, second]), [answering()], CFG, later)
+    assert [r["title"] for r in store.tables["news_items"]] == ["kept", second["title"]]
+    assert {r["scope"] for r in store.tables["news_levels"]} == {"BTC", "ETH", "STOCKS"}
+    assert len(store.tables["news_levels"]) == 3
+
+
+def test_a_failed_page_update_does_not_stop_the_run(tmp_path: Path) -> None:
+    class NoTables(MemoryStore):
+        def upsert(self, table: str, rows: list[dict[str, Any]], on_conflict: str) -> None:
+            raise RuntimeError("relation does not exist")
+
+    store = NoTables()
+    item = news_item("SEC sues Binance", "https://x.example/1")
+    assert pipeline.run(tmp_path, store, static([item]), [answering()], CFG, NOW).scored == 1
+    assert f"data/{pipeline.SCORED_FILE}" in store.files
 
 
 # Nightly tests of the filter

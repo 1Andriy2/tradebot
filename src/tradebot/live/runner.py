@@ -3,7 +3,7 @@
 Every step, for each symbol, on the last fully closed candle:
 - every agent advances its shadow paper book (same rules as the backtester);
 - the champion agent also trades the Bybit demo account (if a venue is configured);
-- a twin of the champion runs a shadow book behind the news filter, to test that filter.
+- twins of the champion and of a reference agent run shadow books behind the news filter.
 Each step is idempotent per bar, so a doubled cron run does not trade twice.
 """
 
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot import indicators as ind
-from tradebot.agents import DEFAULT_CHAMPION, Agent, all_agents, news_twin
+from tradebot.agents import DEFAULT_CHAMPION, NEWS_REFERENCE, Agent, all_agents, news_twin
 from tradebot.config import Settings
 from tradebot.data.history import fetch_ohlcv_range
 from tradebot.exchange.venue import Venue
@@ -82,7 +82,7 @@ class Trader:
         report = StepReport()
         self._long_history.clear()
         champion = self._champion_id()
-        self._prepare_news_twin(champion)
+        self._prepare_news_twins(champion)
         self.store.upsert("agents", [
             {"id": a.id, "kind": a.kind, "label": a.label, "params": a.strategy.params}
             for a in self.roster
@@ -109,16 +109,15 @@ class Trader:
         self._status(report)
         return report
 
-    def _prepare_news_twin(self, champion: str) -> None:
-        """Add the champion's twin for this step. News problems never stop a step: without levels
-        the twin just follows the champion."""
-        base = next((a for a in self.agents if a.id == champion), None)
+    def _prepare_news_twins(self, champion: str) -> None:
+        """Add this step's twins. News problems never stop a step: without levels a twin just
+        follows its original."""
         self.roster = list(self.agents)
-        if base is None:
-            return
-        twin = news_twin(base)
-        self.roster.append(twin)
-        self.policies[twin.id] = self.policies[base.id]
+        for base in self.agents:
+            if base.id in (champion, NEWS_REFERENCE):
+                twin = news_twin(base)
+                self.roster.append(twin)
+                self.policies[twin.id] = self.policies[base.id]
         try:
             self.news_levels = load_levels(self.store)
         except Exception as exc:

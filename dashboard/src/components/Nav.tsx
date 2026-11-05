@@ -6,6 +6,7 @@ import { supabaseBrowser } from "@/lib/supabase/client";
 
 const LINKS = [
   { href: "/", label: "Огляд" },
+  { href: "/news", label: "Новини" },
   { href: "/chart", label: "Графік" },
   { href: "/trades", label: "Угоди" },
   { href: "/leaderboard", label: "Рейтинг" },

@@ -23,7 +23,7 @@ from tradebot.config import NewsConfig
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "1"  # bump on any prompt change: scores from different prompts are not comparable
+PROMPT_VERSION = "2"  # bump on any prompt change: scores from different prompts are not comparable
 BATCH = 20
 TIMEOUT = 90
 ASSET = re.compile(r"^[A-Z0-9.\-]{1,10}$")
@@ -42,7 +42,8 @@ Look for two kinds of effect:
 Return one JSON object {"results": [...]} with one entry per item, using these fields:
 - id: the item's id
 - subject: the person or organisation it is about, at most 80 characters
-- stance: that subject's attitude to the market: "friendly", "hostile" or "neutral"
+- stance: "friendly" or "hostile" if the subject is a person or institution taking a side on the
+  market, otherwise "neutral". Markets, assets and prices have no stance, so they are always "neutral".
 - impact: number from -1 (strongly bad for prices) to 1 (strongly good). Use 0 for routine or
   unrelated items, which should be most of them. Reserve beyond 0.7 for events that move a whole market.
 - confidence: number from 0 to 1, how sure you are of this rating
@@ -51,7 +52,8 @@ Return one JSON object {"results": [...]} with one entry per item, using these f
   geopolitics, company, macro, other
 - assets: affected assets. Use BTC, ETH, CRYPTO (the whole crypto market), STOCKS (the broad stock
   market) or company tickers. Empty if none.
-- reason: one short sentence
+- title_uk: the item's headline translated into Ukrainian, at most 200 characters
+- reason: one short sentence in Ukrainian on why it has this impact
 
 Rate only what the item says. Do not assume what happened afterwards."""
 
@@ -66,12 +68,18 @@ class Assessment(BaseModel):
     event_type: Literal["regulation", "hack", "etf", "monetary", "appointment", "sanctions", "tariff",
                         "election", "geopolitics", "company", "macro", "other"] = "other"
     assets: list[str] = Field(default_factory=list)
+    title_uk: str = ""
     reason: str = ""
 
     @field_validator("subject")
     @classmethod
     def _short_subject(cls, value: str) -> str:
         return value[:80]
+
+    @field_validator("title_uk")
+    @classmethod
+    def _short_title(cls, value: str) -> str:
+        return value[:200]
 
     @field_validator("reason")
     @classmethod

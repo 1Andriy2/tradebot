@@ -146,3 +146,38 @@ export interface PatternRow {
   n: number;
   stable: boolean;
 }
+
+export interface NewsItemRow {
+  cluster: string;
+  first_seen: string;
+  published: string;
+  source: string;
+  kind: string;
+  title: string;
+  title_uk: string;
+  url: string;
+  subject: string;
+  stance: "friendly" | "hostile" | "neutral";
+  impact: number;
+  confidence: number;
+  channel: "direct" | "indirect" | "none";
+  event_type: string;
+  assets: string;
+  reason: string;
+  outlets: string[];
+}
+
+export type NewsLevel = "trade" | "reduce" | "stand_aside" | "unknown";
+
+export interface NewsLevelRow {
+  scope: string;
+  level: NewsLevel;
+  long_mult: number;
+  short_mult: number;
+  negative: number;
+  positive: number;
+  events: number;
+  sources: number;
+  stale: boolean;
+  updated_at: string;
+}

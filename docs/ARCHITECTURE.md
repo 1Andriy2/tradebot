@@ -70,9 +70,11 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
 Results are `news_scored.parquet` and `news_risk.parquet` in the `data` bucket, outside the nightly
 cache sync. Level changes are events of type `news_risk`.
 
-5. **Test** — `news_<champion>` is a shadow twin of the champion: the same signal, scaled by the level in
-   force when each bar closed. Compare it with the champion from the twin's first bar. The demo account
-   never reads the levels.
+5. **Test** — `news_<agent>` is a shadow twin of the champion, and `news_ma_cross` of the always-invested
+   reference agent: the same signal, scaled by the level in force when each bar closed. Compare a twin
+   with its original from the twin's first bar. The demo account never reads the levels.
+6. **Read** — the dashboard's `/news` page shows levels and rated stories from `news_levels` and
+   `news_items`.
 
 ## Database
 

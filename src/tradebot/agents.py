@@ -45,6 +45,8 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
 }
 
 DEFAULT_CHAMPION = "ma_cross"
+# Always in the market, long or short. A twin of a mostly flat champion would show the filter nothing.
+NEWS_REFERENCE = "ma_cross"
 
 
 def news_twin(agent: Agent) -> Agent:

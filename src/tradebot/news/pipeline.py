@@ -12,7 +12,7 @@ import hashlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -43,10 +43,15 @@ PRIORITY = {"official": 0, "social": 1, "market": 2, "news": 3, "geo": 4}
 
 TIMES = ["published", "first_seen", "scored_at"]
 NUMBERS = ["impact", "confidence"]
-TEXTS = ["source", "kind", "title", "url", "cluster", "status", "subject", "stance", "channel",
+TEXTS = ["source", "kind", "title", "title_uk", "url", "cluster", "status", "subject", "stance", "channel",
          "event_type", "assets", "reason", "model", "prompt_version"]
 COLUMNS = TIMES + NUMBERS + TEXTS
-SCORE_FIELDS = ["impact", "confidence", "subject", "stance", "channel", "event_type", "assets", "reason"]
+SCORE_FIELDS = ["impact", "confidence", "subject", "stance", "channel", "event_type", "assets", "title_uk",
+                "reason"]
+PAGE_FIELDS = ["cluster", "first_seen", "published", "source", "kind", "title", "title_uk", "url", "subject",
+               "stance", "impact", "confidence", "channel", "event_type", "assets", "reason"]
+LEVEL_FIELDS = ["scope", "level", "long_mult", "short_mult", "negative", "positive", "events", "sources",
+                "stale"]
 
 
 @dataclass
@@ -57,6 +62,7 @@ class NewsRun:
     pending: int = 0
     risk: list[dict[str, Any]] = field(default_factory=list)
     changes: list[dict[str, Any]] = field(default_factory=list)
+    touched: set[str] = field(default_factory=set)
 
     @property
     def sources_ok(self) -> int:
@@ -141,6 +147,27 @@ def share_scores(frame: pd.DataFrame) -> None:
         frame.loc[open_.index, col] = open_["cluster"].map(heads[col])
 
 
+def page_rows(frame: pd.DataFrame, clusters: set[str] | None = None) -> list[dict[str, Any]]:
+    """One row per story for the dashboard, with every outlet that told it."""
+    rated = frame[frame["impact"].notna() & frame["status"].isin([SCORED, DUPLICATE])]
+    if clusters is not None:
+        rated = rated[rated["cluster"].isin(clusters)]
+    outlets = rated.groupby("cluster")["source"].unique()
+    heads = rated[rated["status"] == SCORED].drop_duplicates("cluster")
+    rows = cast(list[dict[str, Any]], heads[PAGE_FIELDS].to_dict("records"))
+    return [{**row, "outlets": [str(s) for s in outlets[row["cluster"]]]} for row in rows]
+
+
+def publish(store: Store, frame: pd.DataFrame, clusters: set[str], report: NewsRun) -> None:
+    """Update the page's tables. The Parquet files are the record, so a failure here stops nothing."""
+    levels = [{**{k: r[k] for k in LEVEL_FIELDS}, "updated_at": r["ts"]} for r in report.risk]
+    try:
+        store.upsert("news_items", page_rows(frame, clusters), on_conflict="cluster")
+        store.upsert("news_levels", levels, on_conflict="scope")
+    except Exception as exc:
+        log.warning("news page tables not updated: %s", type(exc).__name__)
+
+
 def level_changes(previous: pd.DataFrame, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Dashboard events for markets whose level differs from the last run."""
     last = previous.sort_values("ts").groupby("scope")["level"].last().to_dict() if len(previous) else {}
@@ -168,7 +195,8 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     pending = frame[frame["status"] == PENDING]
     waiting = pending[pending["kind"] != "geo"]  # the loud source going unread is not a blind spot
     behind = bool((waiting["first_seen"] < now - STALE_AFTER).any())
-    report = NewsRun(counts, new=len(fresh), scored=len(answers), pending=len(pending))
+    touched = set(frame.loc[list(answers), "cluster"]) | set(fresh["cluster"])
+    report = NewsRun(counts, new=len(fresh), scored=len(answers), pending=len(pending), touched=touched)
     stale = behind or report.sources_ok == 0
     report.risk = assess(frame[frame["impact"].notna()], now, stale)
     report.changes = level_changes(risk, report.risk)
@@ -206,4 +234,5 @@ def run(data_dir: Path, store: Store, sources: dict[str, Source], providers: lis
     for path in (scored_path, risk_path):
         store.upload(BUCKET, path.name, path.read_bytes())
     store.insert("events", report.changes)
+    publish(store, scored, report.touched, report)
     return report
