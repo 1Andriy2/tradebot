@@ -50,7 +50,7 @@ def side_pressure(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float, int]:
         return 0.0, 0
     # News ages from publication, or a day of backlog would look fresh on the run that finds it.
     # A source's date can only make an item older: it is capped by when the bot first saw it.
-    hours = (now - story_times(events)).dt.total_seconds() / 3600
+    hours = (now - events["born"]).dt.total_seconds() / 3600
     weight = (events["impact"].abs() * events["confidence"] * events["kind"].map(KIND_WEIGHT).fillna(0.5)
               * 0.5 ** (hours / HALF_LIFE_HOURS))
     per_story = weight.groupby(events["cluster"]).max()
@@ -81,7 +81,12 @@ def assess_scope(scope: str, events: pd.DataFrame, now: pd.Timestamp, stale: boo
 
 
 def assess(scored: pd.DataFrame, now: pd.Timestamp, stale: bool) -> list[dict[str, Any]]:
-    """One row per market, from stories that came out in the last 24 hours."""
-    recent = scored[(story_times(scored) > now - WINDOW) & (scored["impact"].abs() >= MIN_IMPACT)
-                    & (scored["confidence"] >= MIN_CONFIDENCE)]
+    """One row per market, from stories that came out in the last 24 hours.
+
+    ``scored`` holds every row, rated or not: a story's age comes from all of them, including a
+    first report that expired before anything rated the story.
+    """
+    dated = scored.assign(born=story_times(scored))
+    recent = dated[(dated["born"] > now - WINDOW) & (dated["impact"].abs() >= MIN_IMPACT)
+                   & (dated["confidence"] >= MIN_CONFIDENCE)]
     return [assess_scope(scope, recent, now, stale) for scope in SCOPES]

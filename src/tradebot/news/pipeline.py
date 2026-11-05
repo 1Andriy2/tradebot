@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -99,8 +100,7 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
     """New items only, each with a status. A repeat of a recent story joins that story's cluster."""
     seen = set(known["url"])
     recent = known[(known["first_seen"] > now - SAME_STORY_WINDOW) & known["status"].isin([PENDING, SCORED])]
-    stories = [(words(t), c, s, k) for t, c, s, k in
-               zip(recent["title"], recent["cluster"], recent["status"], recent["kind"], strict=True)]
+    stories = [(words(t), c) for t, c in zip(recent["title"], recent["cluster"], strict=True)]
     rows = []
     geo_left = GEO_STORIES_PER_RUN
     for item in items:
@@ -110,14 +110,11 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
         status, cluster = first_status(item, now), story_id(item["url"])
         if status == PENDING:
             tokens = words(item["title"])
-            rank = PRIORITY.get(item["kind"], 9)
-            # A story still waiting behind this one must not hold a higher-priority source back.
-            match = next((c for other, c, state, kind in stories if same_story(tokens, other)
-                          and (state == SCORED or PRIORITY.get(kind, 9) <= rank)), None)
+            match = next((c for other, c in stories if same_story(tokens, other)), None)
             if match is not None:
                 status, cluster = DUPLICATE, match
             elif item["kind"] != "geo" or geo_left > 0:
-                stories.append((tokens, cluster, PENDING, item["kind"]))
+                stories.append((tokens, cluster))
                 geo_left -= item["kind"] == "geo"
             else:
                 status = IGNORED
@@ -125,11 +122,19 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
     return typed(pd.DataFrame(rows, columns=COLUMNS))
 
 
-def promote_repeats(frame: pd.DataFrame) -> None:
-    """If a story's first item expired unrated, its oldest repeat takes over, so it still gets a chance."""
-    alive = frame.loc[frame["status"].isin([PENDING, SCORED]), "cluster"]
-    orphans = frame[(frame["status"] == DUPLICATE) & frame["impact"].isna() & ~frame["cluster"].isin(alive)]
-    frame.loc[orphans.drop_duplicates("cluster").index, "status"] = PENDING
+def choose_heads(frame: pd.DataFrame) -> None:
+    """Each unrated story waits on its best item: the highest-priority source, then the oldest. So
+    an official repeat is not held behind a GDELT item, and a story outlives an expired first item."""
+    rated = frame.loc[frame["status"] == SCORED, "cluster"]
+    waiting = frame[frame["status"].isin([PENDING, DUPLICATE]) & frame["impact"].isna()
+                    & ~frame["cluster"].isin(rated)]
+    if waiting.empty:
+        return
+    ranked = waiting.assign(rank=waiting["kind"].map(PRIORITY).fillna(9)).sort_values(
+        ["rank", "first_seen"], kind="stable")
+    heads = ranked.drop_duplicates("cluster").index
+    frame.loc[waiting.index, "status"] = DUPLICATE
+    frame.loc[heads, "status"] = PENDING
 
 
 def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.DataFrame:
@@ -142,10 +147,10 @@ def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.Data
 
 
 def apply_scores(frame: pd.DataFrame, answers: dict[int, tuple[Assessment, str]],
-                 now: pd.Timestamp) -> None:
+                 done: pd.Timestamp) -> None:
     for index, (answer, model) in answers.items():
         values = {**answer.model_dump(include=set(SCORE_FIELDS)), "assets": ",".join(answer.assets),
-                  "status": SCORED, "scored_at": now, "model": model, "prompt_version": PROMPT_VERSION}
+                  "status": SCORED, "scored_at": done, "model": model, "prompt_version": PROMPT_VERSION}
         for col, value in values.items():
             frame.at[index, col] = value
 
@@ -203,20 +208,26 @@ def level_changes(previous: pd.DataFrame, rows: list[dict[str, Any]]) -> list[di
 
 def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
            providers: list[Provider], cfg: NewsConfig, now: pd.Timestamp,
-           fetch: Fetch = download) -> tuple[pd.DataFrame, pd.DataFrame, NewsRun]:
-    """One pass over in-memory tables. Returns the new tables and a report."""
+           fetch: Fetch = download,
+           clock: Callable[[], pd.Timestamp] | None = None) -> tuple[pd.DataFrame, pd.DataFrame, NewsRun]:
+    """One pass over in-memory tables. Returns the new tables and a report.
+
+    ``now`` is the start of the run. Ratings and levels are stamped by ``clock`` once they exist,
+    because tests of the filter must not credit it with a moment before it knew.
+    """
     items, counts = collect(sources, now, fetch)
     fresh = ingest(scored, items, now)
     frame = fresh if scored.empty else pd.concat([scored, fresh]) if len(fresh) else scored
     frame = frame.reset_index(drop=True)
     frame.loc[(frame["status"] == PENDING) & (frame["first_seen"] < now - RETRY_FOR), "status"] = EXPIRED
-    promote_repeats(frame)
+    choose_heads(frame)
 
     batch = to_score(frame, now, cfg)
     payload = [{"id": int(i), "kind": k, "text": t}
                for i, k, t in zip(batch.index, batch["kind"], batch["title"], strict=True)]
     answers = score(providers, payload, now) if payload and providers else {}
-    apply_scores(frame, answers, now)
+    done = clock() if clock else now
+    apply_scores(frame, answers, done)
     share_scores(frame)
 
     pending = frame[frame["status"] == PENDING]
@@ -225,14 +236,15 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     touched = set(frame.loc[list(answers), "cluster"]) | set(fresh["cluster"])
     report = NewsRun(counts, new=len(fresh), scored=len(answers), pending=len(pending), touched=touched)
     stale = behind or report.sources_ok == 0
-    report.risk = assess(frame[frame["impact"].notna()], now, stale)
+    report.risk = assess(frame, done, stale)
     report.changes = level_changes(risk, report.risk)
     rows = pd.DataFrame(report.risk)
     return frame, rows if risk.empty else pd.concat([risk, rows], ignore_index=True), report
 
 
 def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg: NewsConfig,
-        now: pd.Timestamp, fetch: Fetch = download) -> NewsRun:
+        now: pd.Timestamp, fetch: Fetch = download,
+        clock: Callable[[], pd.Timestamp] | None = None) -> NewsRun:
     """Read both tables, do one pass, write them back, and log level changes.
 
     Only a file that does not exist yet starts empty. Any other failure to read stops the run:
@@ -243,7 +255,7 @@ def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg
     risk = read_file(store, RISK_FILE)
     risk = pd.DataFrame() if risk is None else risk
 
-    scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch)
+    scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch, clock)
     publish(store, scored, report, now)
     scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
     risk = rotate(store, RISK_STEM, risk, "ts", now)

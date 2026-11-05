@@ -45,14 +45,16 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
 }
 
 DEFAULT_CHAMPION = "ma_cross"
-# A twin of a mostly flat champion would show the filter nothing, so two steady agents get one too:
-# buy_hold is always long, and ma_cross goes short as well.
+# Agents that get a news twin. Models can become champion, and a twin that came and went with the
+# title would be left holding a position. The rest are steady: a mostly flat agent shows the filter
+# nothing, while buy_hold is always long and ma_cross goes short as well.
 NEWS_REFERENCES = ("buy_hold", "ma_cross")
+NEWS_TWIN_KINDS = ("ml", "rl")
 
 
 def news_twin(agent: Agent) -> Agent:
-    """The same agent behind the news filter. Its kind keeps it out of promotion: only ``lgbm`` and
-    ``rl`` can become champion, and this one exists only to be compared with the original."""
+    """The same agent behind the news filter: it takes the original's position, scaled. Its kind
+    keeps it out of promotion, since it exists only to be compared with the original."""
     return replace(agent, id=f"news_{agent.id}", kind="baseline", news_gated=True)
 
 

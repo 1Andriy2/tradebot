@@ -59,6 +59,10 @@ def down(system: str, user: str) -> str:
     raise httpx.ConnectError("down")
 
 
+def pressure(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float, int]:
+    return risk.side_pressure(events.assign(born=risk.story_times(events)), now)
+
+
 def scored_rows(*rows: dict[str, Any]) -> pd.DataFrame:
     base = {"first_seen": NOW, "published": NOW, "kind": "official", "impact": -1.0, "confidence": 1.0,
             "assets": "BTC", "title": "t", "source": "a", "cluster": "c"}
@@ -347,14 +351,14 @@ def test_one_source_can_never_force_standing_aside() -> None:
 def test_a_repeated_story_counts_once_but_different_stories_add_up() -> None:
     one = scored_rows({"impact": -0.5, "source": "a"}, {"impact": -0.5, "source": "b"})
     two = scored_rows({"impact": -0.5, "source": "a"}, {"impact": -0.5, "source": "b", "cluster": "d"})
-    assert risk.side_pressure(one, NOW) == (0.5, 2)
-    assert risk.side_pressure(two, NOW)[0] == pytest.approx(0.75)
+    assert pressure(one, NOW) == (0.5, 2)
+    assert pressure(two, NOW)[0] == pytest.approx(0.75)
 
 
 def test_a_fresh_repeat_cannot_make_an_old_story_young() -> None:
     day = pd.Timedelta("23h")
     old = {"impact": -0.8, "published": NOW - day, "first_seen": NOW - day}
-    assert risk.side_pressure(scored_rows(old, {"impact": -0.8, "kind": "geo", "source": "b"}), NOW)[0] < 0.1
+    assert pressure(scored_rows(old, {"impact": -0.8, "kind": "geo", "source": "b"}), NOW)[0] < 0.1
 
 
 def test_a_story_stays_out_once_it_is_over_a_day_old_even_if_repeated_today() -> None:
@@ -367,24 +371,24 @@ def test_a_faint_item_is_not_a_second_voice() -> None:
     fading = pd.Timedelta("23h")
     rows = scored_rows({"impact": -1.0}, {"impact": -0.3, "cluster": "d", "source": "b",
                                           "published": NOW - fading, "first_seen": NOW - fading})
-    assert risk.side_pressure(rows, NOW) == (pytest.approx(1.0, abs=0.01), 1)
+    assert pressure(rows, NOW) == (pytest.approx(1.0, abs=0.01), 1)
 
 
 def test_pressure_fades_with_a_six_hour_half_life() -> None:
     old = scored_rows({"impact": -0.8, "published": NOW - pd.Timedelta("6h"),
                        "first_seen": NOW - pd.Timedelta("6h")})
-    assert risk.side_pressure(old, NOW)[0] == pytest.approx(0.4)
+    assert pressure(old, NOW)[0] == pytest.approx(0.4)
 
 
 def test_backlog_found_late_still_counts_as_old_news() -> None:
     found_now = scored_rows({"impact": -0.8, "published": NOW - pd.Timedelta("6h")})
-    assert risk.side_pressure(found_now, NOW)[0] == pytest.approx(0.4)
+    assert pressure(found_now, NOW)[0] == pytest.approx(0.4)
 
 
 def test_a_future_date_from_a_source_cannot_make_news_stronger() -> None:
     forged = scored_rows({"impact": -0.8, "published": NOW + pd.Timedelta("48h"),
                           "first_seen": NOW - pd.Timedelta("6h")})
-    assert risk.side_pressure(forged, NOW)[0] == pytest.approx(0.4)
+    assert pressure(forged, NOW)[0] == pytest.approx(0.4)
 
 
 def test_bad_news_cuts_longs_only_and_good_news_cuts_shorts_only() -> None:
@@ -566,13 +570,21 @@ def test_an_unread_gdelt_backlog_does_not_blind_the_filter() -> None:
     assert report.pending == 1 and all(r["level"] == risk.TRADE for r in report.risk)
 
 
-def test_an_official_source_is_not_held_back_by_a_waiting_gdelt_story() -> None:
+def test_an_official_repeat_takes_the_place_of_a_waiting_gdelt_item() -> None:
     frame, _, _ = run_once([geo_story("steel")], [])
     later = NOW + pd.Timedelta("15min")
     official = {**news_item("Tariffs steel", "https://f.example/1", source="fed_press", kind="official"),
                 "first_seen": later}
     again, _, _ = run_once([official], [], frame, now=later)
-    assert again.iloc[1]["status"] == pipeline.PENDING and again["cluster"].nunique() == 2
+    assert list(again["status"]) == [pipeline.DUPLICATE, pipeline.PENDING]
+    assert again["cluster"].nunique() == 1  # still one story, so it cannot count twice
+
+
+def test_a_story_told_by_two_sources_is_rated_once_and_counts_once() -> None:
+    items = [geo_story("steel"), {**news_item("Tariffs steel", "https://f.example/1", source="fed_press",
+                                              kind="official")}]
+    frame, _, report = run_once(items, [answering(-0.5, ("BTC",))])
+    assert report.scored == 1 and frame["cluster"].nunique() == 1
 
 
 def test_a_repeat_takes_over_when_its_story_expires_unrated() -> None:
@@ -585,6 +597,23 @@ def test_a_repeat_takes_over_when_its_story_expires_unrated() -> None:
     assert frame.iloc[1]["status"] == pipeline.DUPLICATE
     frame, _, report = run_once([], [answering()], frame, now=NOW + pd.Timedelta("7h"))
     assert list(frame["status"]) == [pipeline.EXPIRED, pipeline.SCORED] and report.scored == 1
+
+
+def test_an_expired_first_report_still_dates_the_story() -> None:
+    """Regression: a repeat rated after an outage made a day-old story look fresh."""
+    old = {"status": pipeline.EXPIRED, "impact": np.nan, "first_seen": NOW - pd.Timedelta("20h"),
+           "published": NOW - pd.Timedelta("20h")}
+    rated_late = {"first_seen": NOW - pd.Timedelta("7h"), "published": NOW - pd.Timedelta("7h")}
+    weight = risk.assess(scored_rows(old, rated_late), NOW, False)[0]["negative"]
+    assert weight == pytest.approx(0.5 ** (20 / 6))
+
+
+def test_ratings_and_levels_carry_the_time_they_were_finished() -> None:
+    done = NOW + pd.Timedelta("4min")
+    item = news_item("SEC sues Binance", "https://x.example/1")
+    frame, risks, _ = pipeline.update(pipeline.typed(pd.DataFrame()), pd.DataFrame(), static([item]),
+                                      [answering()], CFG, NOW, clock=lambda: done)
+    assert frame.iloc[0]["scored_at"] == done and (risks["ts"] == done).all()
 
 
 def test_official_news_goes_first_when_the_budget_is_short() -> None:
@@ -822,8 +851,9 @@ def falling_after(stamps: pd.DatetimeIndex, index: pd.DatetimeIndex) -> pd.Serie
 
 
 def rated(stamps: pd.DatetimeIndex, **over: Any) -> pd.DataFrame:
-    rows = {"first_seen": stamps, "scored_at": stamps, "impact": -0.8, "confidence": 0.9, "assets": "BTC",
-            "cluster": [str(i) for i in range(len(stamps))], "prompt_version": scoring.PROMPT_VERSION,
+    rows = {"first_seen": stamps, "scored_at": stamps, "status": "scored", "impact": -0.8,
+            "confidence": 0.9, "assets": "BTC", "cluster": [str(i) for i in range(len(stamps))],
+            "prompt_version": scoring.PROMPT_VERSION,
             "model": MODEL}
     return pd.DataFrame({**rows, **over})
 
@@ -910,7 +940,8 @@ def test_crypto_wide_ratings_count_for_each_coin() -> None:
 
 def test_a_story_told_many_times_is_one_event() -> None:
     close = falling_after(STAMPS, INDEX)
-    rows = nightly(close, rated(STAMPS, cluster="same"), EMPTY, "btc")
+    repeats = ["scored"] + ["duplicate"] * (len(STAMPS) - 1)
+    rows = nightly(close, rated(STAMPS, cluster="same", status=repeats), EMPTY, "btc")
     assert study(rows, "llm_bad_news")["n"] <= 1
 
 

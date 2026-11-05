@@ -23,7 +23,6 @@ class Bar:
     signal: float      # strategy output at this bar's close
     prev_atr: float    # ATR at the previous bar's close (known before this bar)
     funding: float = 0.0  # funding rate charged on positions held into this bar
-    scale: float = 1.0  # share of the signal's position to take, from the news filter
 
 
 def step_bar(
@@ -47,8 +46,7 @@ def step_bar(
         book.fill(bar.ts, 0.0, hit[0], hit[1])
         policy.on_stopped(state)
 
-    decision = policy.decide(state, bar.day, book.equity(bar.close), bar.signal, bar.close, book.units,
-                             bar.scale)
+    decision = policy.decide(state, bar.day, book.equity(bar.close), bar.signal, bar.close, book.units)
     if decision is not None and allow_order:
         state.extra["pending"] = {"target": decision.target_units, "reason": decision.reason}
     return decision

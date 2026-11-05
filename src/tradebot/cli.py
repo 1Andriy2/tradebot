@@ -271,7 +271,8 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     providers = providers_from_env(settings.news)
     if not providers:
         log.warning("no GEMINI_API_KEY or GROQ_API_KEY: collecting without scoring")
-    report = run(_store(args), sources, providers, settings.news, now)
+    report = run(_store(args), sources, providers, settings.news, now,
+                 clock=lambda: pd.Timestamp.now(tz="UTC"))
     failed = [name for name, count in report.counts.items() if count < 0]
     print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
           f"pending={report.pending} failed={failed}")

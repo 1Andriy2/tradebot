@@ -3,7 +3,7 @@
 Every step, for each symbol, on the last fully closed candle:
 - every agent advances its shadow paper book (same rules as the backtester);
 - the champion agent also trades the Bybit demo account (if a venue is configured);
-- twins of the champion and of reference agents run shadow books behind the news filter.
+- news twins hold each original's position scaled by the news filter, in shadow books only.
 Each step is idempotent per bar, so a doubled cron run does not trade twice.
 """
 
@@ -19,7 +19,14 @@ import numpy as np
 import pandas as pd
 
 from tradebot import indicators as ind
-from tradebot.agents import DEFAULT_CHAMPION, NEWS_REFERENCES, Agent, all_agents, news_twin
+from tradebot.agents import (
+    DEFAULT_CHAMPION,
+    NEWS_REFERENCES,
+    NEWS_TWIN_KINDS,
+    Agent,
+    all_agents,
+    news_twin,
+)
 from tradebot.config import Settings
 from tradebot.data.history import fetch_ohlcv_range
 from tradebot.exchange.venue import Venue
@@ -75,6 +82,7 @@ class Trader:
         self._long_history: dict[tuple[str, int], pd.DataFrame] = {}
         self.roster = list(self.agents)
         self.news_levels: pd.DataFrame | None = None  # None: unknown this step, not "no news"
+        self._targets: dict[tuple[str, str], dict[pd.Timestamp, tuple[float, float]]] = {}
 
     # ---------- public API ----------
 
@@ -82,7 +90,7 @@ class Trader:
         report = StepReport()
         self._long_history.clear()
         champion = self._champion_id()
-        self._prepare_news_twins(champion)
+        self._prepare_news_twins()
         self.store.upsert("agents", [
             {"id": a.id, "kind": a.kind, "label": a.label, "params": a.strategy.params}
             for a in self.roster
@@ -99,6 +107,9 @@ class Trader:
             # Each agent is isolated: one failing agent (or a demo-venue error) never stops the rest.
             for agent in self.roster:
                 try:
+                    if agent.news_gated:  # after its original, whose position it follows
+                        report.decisions += self._advance_twin(agent, symbol, df)
+                        continue
                     signal = self._signal(agent, symbol, df)
                     report.decisions += self._advance_shadow(agent, symbol, df, signal, atr)
                     if self.venue is not None and agent.id == champion:
@@ -109,12 +120,12 @@ class Trader:
         self._status(report)
         return report
 
-    def _prepare_news_twins(self, champion: str) -> None:
-        """Add this step's twins. News problems never stop a step: without levels a twin just
-        follows its original."""
+    def _prepare_news_twins(self) -> None:
+        """Add the twins and read the levels. News problems never stop a step."""
+        self._targets.clear()
         self.roster = list(self.agents)
         for base in self.agents:
-            if base.id == champion or base.id in NEWS_REFERENCES:
+            if base.kind in NEWS_TWIN_KINDS or base.id in NEWS_REFERENCES:
                 twin = news_twin(base)
                 self.roster.append(twin)
                 self.policies[twin.id] = self.policies[base.id]
@@ -157,14 +168,6 @@ class Trader:
             self._long_history[key] = fetch_ohlcv_range(self.public, symbol, self.tf, since)
         return agent.strategy.signal(self._long_history[key]).reindex(df.index, method="ffill")
 
-    def _news_scale(self, agent: Agent, symbol: str, signal: pd.Series, state: PolicyState) -> pd.Series:
-        if not agent.news_gated:
-            return pd.Series(1.0, index=signal.index)
-        if self.news_levels is None:  # a failed download must not undo a cut that is in force
-            return pd.Series(state.prev_scale, index=signal.index)
-        bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
-        return exposure_scale(signal, self.news_levels, symbol.split("/")[0], bar)
-
     # ---------- state ----------
 
     def _load(self, agent_id: str, venue: str, symbol: str) -> dict[str, Any] | None:
@@ -203,23 +206,78 @@ class Trader:
         if len(new) == 0:
             return 0
         decisions = []
+        targets = self._targets.setdefault((agent.id, symbol), {})
         o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
         sig_v, atr_v = signal.to_numpy(float), atr.to_numpy(float)
-        scale_v = self._news_scale(agent, symbol, signal, state).to_numpy(float)
         for i in range(len(df) - len(new), len(df)):  # new bars are the tail of df
             ts = df.index[i]
             bar = Bar(ts, ts.date(), o[i], h[i], lo[i], c[i], float(sig_v[i]),
-                      float(atr_v[i - 1]) if i > 0 else float("nan"), scale=float(scale_v[i]))
+                      float(atr_v[i - 1]) if i > 0 else float("nan"))
             before = book.units
             decision = step_bar(book, state, policy, bar, agent.strategy.uses_stops)
             after = decision.target_units if decision else book.units
-            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol,
-                                                bar.signal * bar.scale + 0.0, before,
+            targets[ts] = (after, bar.signal)
+            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, bar.signal, before,
                                                 after, decision.reason if decision else "no_change"))
         self._flush(agent.id, "shadow", symbol, state, book)
         self.store.insert("decisions", decisions)
         self._save(agent.id, "shadow", symbol, state, book, new[-1])
         return len(decisions)
+
+    # ---------- news twins ----------
+
+    def _advance_twin(self, agent: Agent, symbol: str, df: pd.DataFrame) -> int:
+        """Hold the original's target for each new bar, scaled by the news level.
+
+        A scaled copy of the original's position can never exceed it or sit on the other side, and
+        the original's rules and stops apply through it. Orders fill at the next open, so when the
+        original is stopped out inside a bar the twin leaves one bar later.
+        """
+        targets = self._targets.get((agent.id.removeprefix("news_"), symbol), {})
+        row = self._load(agent.id, "shadow", symbol)
+        state, book = self._restore(row, self.slot_equity, self.policies[agent.id])
+        last_bar = pd.Timestamp(row["last_bar"]) if row and row.get("last_bar") else df.index[-2]
+        new = df.index[df.index > last_bar]
+        if len(new) == 0:
+            return 0
+        wanted = pd.Series({ts: targets[ts][0] for ts in new if ts in targets}, dtype=float)
+        bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
+        scale = exposure_scale(wanted, self._twin_levels(symbol, state), symbol.split("/")[0], bar)
+        decisions = []
+        for ts in new:
+            pending = state.extra.pop("pending", None)
+            if pending is not None:
+                book.fill(ts, pending["target"], float(df.at[ts, "open"]), pending["reason"])
+            before = book.units
+            after, shown = before, 0.0
+            if ts in targets:
+                after, shown = targets[ts][0] * scale[ts], targets[ts][1] * scale[ts] + 0.0
+            moved = abs(after - before) > EPS
+            if moved:
+                state.extra["pending"] = {"target": after, "reason": "signal"}
+            decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, shown, before, after,
+                                                "signal" if moved else "no_change"))
+        self._flush(agent.id, "shadow", symbol, state, book)
+        self.store.insert("decisions", decisions)
+        self._save(agent.id, "shadow", symbol, state, book, new[-1])
+        return len(decisions)
+
+    def _twin_levels(self, symbol: str, state: PolicyState) -> pd.DataFrame:
+        """Levels to use now. In an outage, the last ones this twin saw: a failed download must not
+        undo a cut, and they expire by age like any other level."""
+        scope = symbol.split("/")[0]
+        if self.news_levels is None:
+            saved = state.extra.get("levels")
+            if not saved:
+                return pd.DataFrame()
+            return pd.DataFrame([saved]).assign(ts=lambda d: pd.to_datetime(d["ts"], utc=True))
+        mine = self.news_levels[self.news_levels["scope"] == scope] if len(self.news_levels) else None
+        if mine is not None and len(mine):
+            latest = mine.sort_values("ts").tail(1)
+            state.extra["levels"] = {"ts": pd.Timestamp(latest["ts"].iloc[0]).isoformat(), "scope": scope,
+                                     "long_mult": float(latest["long_mult"].to_numpy(float)[0]),
+                                     "short_mult": float(latest["short_mult"].to_numpy(float)[0])}
+        return self.news_levels
 
     # ---------- champion on the demo account ----------
 

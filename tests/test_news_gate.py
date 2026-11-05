@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -9,18 +9,15 @@ import pytest
 
 from tests.test_live import FakePublic, FakeVenue
 from tradebot.agents import Agent, news_twin
-from tradebot.config import RiskParams, Settings
+from tradebot.config import Settings
 from tradebot.live.runner import Trader
 from tradebot.news.archive import BUCKET
 from tradebot.news.gate import exposure_scale
 from tradebot.news.pipeline import RISK_FILE
-from tradebot.policy import DecisionPolicy, PolicyState
-from tradebot.risk import RiskManager
 from tradebot.store import MemoryStore
 from tradebot.strategies.base import Strategy
 
 BAR = pd.Timedelta("15min")
-DAY = date(2026, 11, 5)
 START = pd.Timestamp("2026-11-05 10:00", tz="UTC")
 INDEX = pd.date_range(START, periods=8, freq="15min")
 
@@ -50,9 +47,9 @@ def apply_levels(raw: pd.Series, table: pd.DataFrame, scope: str, bar: pd.Timede
 
 
 def test_a_bar_sees_only_levels_written_before_it_closed() -> None:
-    written = START + pd.Timedelta("31min")  # after the 10:15 bar closes at 10:30
+    written = START + pd.Timedelta("29min") + pd.Timedelta("30s")  # within a minute of 10:30
     gated = apply_levels(signal(), levels(written), "BTC", BAR)
-    assert gated[INDEX[1]] == 1.0 and gated[INDEX[2]] == 0.0
+    assert gated[INDEX[1]] == 1.0 and gated[INDEX[2]] == 0.0  # 10:15 bar closes 10:30: too close
 
 
 def test_longs_and_shorts_use_their_own_multiplier() -> None:
@@ -105,7 +102,7 @@ def store_levels(store: MemoryStore, table: pd.DataFrame) -> None:
 
 
 def last_time(public: FakePublic) -> pd.Timestamp:
-    return pd.Timestamp(public.rows[-1][0], unit="ms", tz="UTC") + BAR
+    return pd.Timestamp(public.rows[-1][0], unit="ms", tz="UTC") + BAR - pd.Timedelta("5min")
 
 
 def run_with_levels(long_mult: float, venue: FakeVenue | None = None) -> tuple[MemoryStore, Trader]:
@@ -138,71 +135,6 @@ def test_the_demo_account_ignores_news_levels() -> None:
     assert with_news.orders and with_news.orders == without_news.orders
 
 
-def stopped_policy() -> tuple[DecisionPolicy, PolicyState]:
-    policy = DecisionPolicy(RiskManager(RiskParams()))
-    state = policy.new_state(10_000.0)
-    state.prev_sig = 1.0
-    policy.on_stopped(state)
-    return policy, state
-
-
-@pytest.mark.parametrize("scale", [0.5, 0.0])
-def test_a_news_cut_cannot_end_the_wait_after_a_stop(scale: float) -> None:
-    """Regression: a scaled signal looked like a new signal, and opened a position."""
-    policy, state = stopped_policy()
-    assert policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0, scale) is None
-    assert state.suppressed_sig == 1.0
-
-
-def test_a_new_signal_still_ends_the_wait() -> None:
-    policy, state = stopped_policy()
-    assert policy.decide(state, DAY, 10_000.0, -1.0, 100.0, 0.0, 0.5) is not None
-
-
-def test_scale_shrinks_the_position_and_restores_it() -> None:
-    policy = DecisionPolicy(RiskManager(RiskParams()))
-    state = policy.new_state(10_000.0)
-    full = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0)
-    assert full is not None
-    half = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, full.target_units, 0.5)
-    assert half is not None and half.target_units == pytest.approx(full.target_units / 2)
-    back = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, half.target_units, 1.0)
-    assert back is not None and back.target_units == pytest.approx(full.target_units)
-
-
-@pytest.mark.parametrize(("price", "equity"), [(25.0, 9_700.0), (400.0, 40_000.0)])
-def test_a_cut_and_release_never_leaves_more_than_the_signal_asked_for(price: float, equity: float) -> None:
-    """Regression: resizing from current equity and price could end above the original position."""
-    policy = DecisionPolicy(RiskManager(RiskParams()))
-    state = policy.new_state(10_000.0)
-    entry = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0)
-    assert entry is not None
-    cut = policy.decide(state, DAY, equity, 1.0, price, entry.target_units, 0.5)
-    assert cut is not None and cut.target_units == pytest.approx(entry.target_units / 2)
-    back = policy.decide(state, DAY, equity, 1.0, price, cut.target_units, 1.0)
-    assert back is not None and back.target_units == pytest.approx(entry.target_units)
-
-
-def test_a_fully_cut_position_comes_back_at_its_own_size() -> None:
-    policy = DecisionPolicy(RiskManager(RiskParams()))
-    state = policy.new_state(10_000.0)
-    entry = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0)
-    assert entry is not None
-    out = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, entry.target_units, 0.0)
-    assert out is not None and out.target_units == 0.0
-    assert policy.decide(state, DAY, 20_000.0, 1.0, 50.0, 0.0, 0.0) is None
-    back = policy.decide(state, DAY, 20_000.0, 1.0, 50.0, 0.0, 1.0)
-    assert back is not None and back.target_units == pytest.approx(entry.target_units)
-
-
-def test_state_saved_before_scale_existed_still_loads() -> None:
-    policy, state = stopped_policy()
-    saved = state.to_dict()
-    del saved["prev_scale"], saved["base_units"]
-    loaded = PolicyState.from_dict(saved)
-    assert loaded.prev_scale == 1.0 and loaded.base_units == 0.0
-
-
 def test_the_twin_never_trades_on_the_demo_account() -> None:
     store, _ = run_with_levels(0.5, FakeVenue())
     assert store.select("decisions", {"agent_id": "news_ma_cross", "venue": "demo"}) == []
@@ -219,8 +151,6 @@ def test_missing_levels_do_not_stop_the_step() -> None:
 def test_a_failed_download_keeps_a_cut_in_force() -> None:
     """Regression: an outage read as 'no news' and put the twin back at full size."""
     store, bot = run_with_levels(0.0)
-    (row,) = store.select("agent_state", {"agent_id": "news_ma_cross"})
-    assert row["state"]["policy"]["prev_scale"] == 0.0
     store.files.clear()
 
     def outage(bucket: str, path: str) -> bytes:
@@ -232,32 +162,66 @@ def test_a_failed_download_keeps_a_cut_in_force() -> None:
     assert store.select("decisions", {"agent_id": "news_ma_cross"})[-1]["signal"] == 0.0
 
 
+def test_a_cut_from_an_old_outage_expires() -> None:
+    store, bot = run_with_levels(0.0)
+
+    def outage(bucket: str, path: str) -> bytes:
+        raise RuntimeError("503")
+
+    store.download = outage  # type: ignore[method-assign]
+    for _ in range(6):
+        bot.public.add_bar(100.0)
+    assert bot.step().errors == []
+    assert store.select("decisions", {"agent_id": "news_ma_cross"})[-1]["signal"] == 1.0
+
+
+def twin_books(multipliers: list[float], value: float = 1.0) -> tuple[MemoryStore, list[float], list[float]]:
+    """Runs a few bars with these long multipliers. Returns the original's and the twin's targets."""
+    store = MemoryStore()
+    bot = trader(store, value=value)
+    for mult in multipliers:
+        store_levels(store, levels(last_time(bot.public) + BAR, mult, mult))
+        bot.public.add_bar(100.0)
+        assert bot.step().errors == []
+    rows = {a: [d["units_after"] for d in store.select("decisions", {"agent_id": a})]
+            for a in ("ma_cross", "news_ma_cross")}
+    return store, rows["ma_cross"], rows["news_ma_cross"]
+
+
+def test_the_twin_is_always_a_share_of_the_original() -> None:
+    _, plain, twin = twin_books([1.0, 0.5, 0.0, 0.5, 1.0])
+    size = max(plain)
+    assert size > 0 and twin[-5:] == pytest.approx([size, size / 2, 0.0, size / 2, size])
+
+
+@pytest.mark.parametrize("value", [1.0, -1.0])
+def test_the_twin_never_exceeds_or_opposes_the_original(value: float) -> None:
+    _, plain, twin = twin_books([0.5, 1.0, 0.0, 0.3, 1.0], value)
+    assert all(abs(t) <= abs(p) + 1e-12 and t * p >= 0 for p, t in zip(plain, twin, strict=True))
+
+
+def test_policy_and_simulation_know_nothing_about_news() -> None:
+    root = Path(__file__).parents[1] / "src/tradebot"
+    for name in ("policy.py", "simulate.py"):
+        text = (root / name).read_text()
+        assert "scale" not in text and "news" not in text
+
+
+def test_every_model_and_reference_agent_gets_a_twin_whoever_is_champion() -> None:
+    store = MemoryStore()
+    store.upsert("champion", [{"id": 1, "agent_id": "rl"}], on_conflict="id")
+    settings = Settings()
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    agents = [Agent("lgbm", "ml", Always()), Agent("rl", "rl", Always()), Agent("grid", "baseline", Always())]
+    bot = Trader(settings, store, FakePublic(), None, agents)
+    bot.public.add_bar(100.0)
+    bot.step()
+    assert {a.id for a in bot.roster} == {"lgbm", "rl", "grid", "news_lgbm", "news_rl"}
+
+
 def test_a_corrupt_levels_file_does_not_stop_the_step() -> None:
     store = MemoryStore()
     store.upload(BUCKET, RISK_FILE, b"not parquet")
     bot = trader(store)
     bot.public.add_bar(100.0)
     assert bot.step().errors == []
-
-
-def test_both_the_champion_and_the_reference_agent_get_a_twin() -> None:
-    store = MemoryStore()
-    store.upsert("champion", [{"id": 1, "agent_id": "rl"}], on_conflict="id")
-    settings = Settings()
-    settings.markets.symbols = ["BTC/USDT:USDT"]
-    agents = [Agent("ma_cross", "baseline", Always()), Agent("buy_hold", "baseline", Always()),
-              Agent("rl", "rl", Always(0.0))]
-    bot = Trader(settings, store, FakePublic(), None, agents)
-    bot.public.add_bar(100.0)
-    assert bot.step().errors == []
-    assert {a.id for a in bot.roster} == {"ma_cross", "buy_hold", "rl", "news_ma_cross", "news_buy_hold",
-                                          "news_rl"}
-
-
-def test_a_champion_that_is_not_loaded_gets_no_twin() -> None:
-    store = MemoryStore()
-    store.upsert("champion", [{"id": 1, "agent_id": "gone"}], on_conflict="id")
-    bot = trader(store)
-    bot.public.add_bar(100.0)
-    bot.step()
-    assert [a.id for a in bot.roster] == ["ma_cross", "news_ma_cross"]
