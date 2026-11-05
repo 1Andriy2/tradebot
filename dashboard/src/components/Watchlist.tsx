@@ -39,7 +39,7 @@ function Candidate({ item, onPick, busy }: { item: AssetCandidate; onPick: () =>
 export function Watchlist({ rows, onSubscribed, onRemoved }: {
   rows: WatchRow[];
   onSubscribed: (ticker: string) => void;
-  onRemoved: (ticker: string) => void;
+  onRemoved: (row: WatchRow) => void;
 }) {
   const [query, setQuery] = useState("");
   const [choices, setChoices] = useState<AssetCandidate[]>([]);
@@ -84,7 +84,7 @@ export function Watchlist({ rows, onSubscribed, onRemoved }: {
   async function remove(row: WatchRow) {
     const { error } = await supabaseBrowser().from("watchlist").delete().eq("id", row.id);
     if (error) setNote(`Не вдалося відписатися: ${error.message}`);
-    else onRemoved(row.ticker);
+    else onRemoved(row);
   }
 
   return (

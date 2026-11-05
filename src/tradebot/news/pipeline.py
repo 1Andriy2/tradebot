@@ -44,12 +44,13 @@ REPUBLISH = pd.Timedelta("6h")  # a failed write to the page's tables is repaire
 # GDELT finds about 20 new stories a run, which alone would use the daily budget in hours and leave
 # official sources waiting. Repeats stay free, so outlets can still confirm a story.
 GEO_STORIES_PER_RUN = 3
-PRIORITY = {"watch": -1, "official": 0, "social": 1, "market": 2, "news": 3, "geo": 4}
+# Official items come first: there are few, and the risk filter depends on them. Followed assets next.
+PRIORITY = {"official": 0, "watch": 1, "social": 2, "market": 3, "news": 4, "geo": 5}
 
 TIMES = ["published", "first_seen", "scored_at"]
 NUMBERS = ["impact", "confidence"]
 TEXTS = ["source", "kind", "title", "title_uk", "url", "cluster", "status", "subject", "stance", "channel",
-         "event_type", "assets", "reason", "model", "prompt_version", "watch"]
+         "event_type", "assets", "reason", "model", "prompt_version", "watch", "ticker"]
 COLUMNS = TIMES + NUMBERS + TEXTS
 SCORE_FIELDS = ["impact", "confidence", "subject", "stance", "channel", "event_type", "assets", "title_uk",
                 "reason"]
@@ -103,7 +104,7 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
     """New items only, each with a status. A repeat of a recent story joins that story's cluster."""
     seen = set(known["url"])
     recent = known[(known["first_seen"] > now - SAME_STORY_WINDOW)
-                   & known["status"].isin([PENDING, SCORED, EXPIRED])]
+                   & known["status"].isin([PENDING, SCORED, EXPIRED, OFF_TOPIC])]
     stories = [(words(t), c) for t, c in zip(recent["title"], recent["cluster"], strict=True)]
     rows = []
     geo_left = GEO_STORIES_PER_RUN
@@ -114,8 +115,9 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
         status, cluster = first_status(item, now), story_id(item["url"])
         if status == PENDING:
             tokens = words(item["title"])
-            # Market items share a template, so their words say nothing: two moves are two events.
-            match = None if item["kind"] == "market" else next(
+            # Market items and filings share a template, so their words say nothing.
+            templated = item["kind"] == "market" or item["source"] == "sec_8k"
+            match = None if templated else next(
                 (c for other, c in stories if same_story(tokens, other)), None)
             if match is not None:
                 status, cluster = DUPLICATE, match
@@ -131,12 +133,14 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
 def choose_heads(frame: pd.DataFrame) -> None:
     """Each unrated story waits on its best item: the highest-priority source, then the oldest. So
     an official repeat is not held behind a GDELT item, and a story outlives an expired first item."""
-    rated = frame.loc[frame["status"] == SCORED, "cluster"]
+    rated = frame.loc[frame["status"].isin([SCORED, OFF_TOPIC]), "cluster"]
     waiting = frame[frame["status"].isin([PENDING, DUPLICATE]) & frame["impact"].isna()
                     & ~frame["cluster"].isin(rated)]
     if waiting.empty:
         return
-    ranked = waiting.assign(rank=waiting["kind"].map(PRIORITY).fillna(9)).sort_values(
+    # A followed item goes last here, so a story with a general source stays in the risk level.
+    ranks = {**PRIORITY, "watch": 9}
+    ranked = waiting.assign(rank=waiting["kind"].map(ranks).fillna(9)).sort_values(
         ["rank", "first_seen"], kind="stable")
     heads = ranked.drop_duplicates("cluster").index
     frame.loc[waiting.index, "status"] = DUPLICATE
@@ -145,7 +149,8 @@ def choose_heads(frame: pd.DataFrame) -> None:
 
 def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.DataFrame:
     """What this run may send to the model: official sources first, newest first, within budget."""
-    used = int(((frame["status"] == SCORED) & (frame["scored_at"] > now - pd.Timedelta("24h"))).sum())
+    asked = frame["status"].isin([SCORED, OFF_TOPIC])
+    used = int((asked & (frame["scored_at"] > now - pd.Timedelta("24h"))).sum())
     room = max(0, min(cfg.max_items_per_run, cfg.max_items_per_day - used))
     pending = frame[frame["status"] == PENDING]
     order = pending.assign(rank=pending["kind"].map(PRIORITY).fillna(9))
@@ -155,12 +160,10 @@ def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.Data
 def apply_scores(frame: pd.DataFrame, answers: dict[int, tuple[Assessment, str]],
                  done: pd.Timestamp) -> None:
     for index, (answer, model) in answers.items():
-        watch = frame.at[index, "watch"]
-        if watch and not answer.about_asset:
-            frame.at[index, "status"] = OFF_TOPIC
+        if frame.at[index, "watch"] and not answer.about_asset:
+            frame.at[index, "status"], frame.at[index, "scored_at"] = OFF_TOPIC, done
             continue
-        assets = dict.fromkeys([*([str(watch)] if watch else []), *answer.assets])
-        values = {**answer.model_dump(include=set(SCORE_FIELDS)), "assets": ",".join(assets),
+        values = {**answer.model_dump(include=set(SCORE_FIELDS)), "assets": ",".join(answer.assets),
                   "status": SCORED, "scored_at": done, "model": model, "prompt_version": PROMPT_VERSION}
         for col, value in values.items():
             frame.at[index, col] = value
@@ -181,11 +184,11 @@ def page_rows(frame: pd.DataFrame, clusters: set[str] | None = None) -> list[dic
     if clusters is not None:
         rated = rated[rated["cluster"].isin(clusters)]
     outlets = rated.groupby("cluster")["source"].unique()
-    watches = rated[rated["watch"] != ""].groupby("cluster")["watch"].unique().to_dict()
+    tickers = rated[rated["ticker"] != ""].groupby("cluster")["ticker"].unique().to_dict()
     heads = rated[rated["status"] == SCORED].drop_duplicates("cluster")
     rows = cast(list[dict[str, Any]], heads[PAGE_FIELDS].to_dict("records"))
     return [{**row, "outlets": [str(s) for s in outlets[row["cluster"]]],
-             "assets": ",".join(dict.fromkeys([*row["assets"].split(","), *watches.get(row["cluster"], [])]))
+             "assets": ",".join(dict.fromkeys([*tickers.get(row["cluster"], []), *row["assets"].split(",")]))
              .strip(",")} for row in rows]
 
 
@@ -228,7 +231,7 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
 
     ``now`` is the start of the run. Ratings and levels are stamped by ``clock`` once they exist,
     because tests of the filter must not credit it with a moment before it knew. ``watched`` maps
-    the tickers being followed to their names; anything unsubscribed stops at once.
+    the ids of followed assets to their names; anything unsubscribed stops at once.
     """
     watched = watched or {}
     items, counts = collect(sources, now, fetch)
@@ -236,13 +239,14 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     frame = fresh if scored.empty else pd.concat([scored, fresh]) if len(fresh) else scored
     frame = frame.reset_index(drop=True)
     frame.loc[(frame["status"] == PENDING) & (frame["first_seen"] < now - RETRY_FOR), "status"] = EXPIRED
-    dropped = (frame["status"] == PENDING) & (frame["watch"] != "") & ~frame["watch"].isin(watched)
-    frame.loc[dropped, "status"] = IGNORED
+    unrated = frame["status"].isin([PENDING, DUPLICATE]) & frame["impact"].isna()
+    frame.loc[unrated & (frame["watch"] != "") & ~frame["watch"].isin(watched), "status"] = IGNORED
     choose_heads(frame)
 
     batch = to_score(frame, now, cfg)
-    payload = [{"id": int(i), "kind": k, "text": t, **({"asset": f"{watched[w]} ({w})"} if w else {})}
-               for i, k, t, w in zip(batch.index, batch["kind"], batch["title"], batch["watch"], strict=True)]
+    payload = [{"id": int(i), "kind": r["kind"], "text": r["title"],
+                **({"asset": f"{watched[r['watch']]} ({r['ticker']})"} if r["watch"] in watched else {})}
+               for i, r in zip(batch.index, batch.to_dict("records"), strict=True)]
     answers = score(providers, payload, now) if payload and providers else {}
     done = clock() if clock else now
     apply_scores(frame, answers, done)

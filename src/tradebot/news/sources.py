@@ -61,8 +61,8 @@ PRICE_MARKET = re.compile(r"\b(price|above|below|up or down|hit \$|reach \$)", r
 GOOGLE_NEWS = "https://news.google.com/rss/search"
 YAHOO_NEWS = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 SEC_COMPANY = "https://www.sec.gov/cgi-bin/browse-edgar"
-COMPANY_SUFFIX = re.compile(r"[\s,]+(inc|corp|corporation|co|company|ltd|plc|holdings|group|class [a-z])\.?$",
-                            re.I)
+COMPANY_WORDS = "inc|corp|corporation|co|com|company|ltd|plc|holdings|group|class [a-z]"
+COMPANY_SUFFIX = re.compile(rf"[\s,&]+(?:{COMPANY_WORDS})\.?$|\s*/[a-z]{{2}}/?$|[\s,&/]+$", re.I)
 
 TAG = re.compile(r"<[^>]+>")
 INVISIBLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​-‏‪-‮⁠-⁩﻿]")
@@ -123,7 +123,7 @@ def parse_feed(content: bytes, source: str, kind: str, seen_at: pd.Timestamp) ->
 
 def parse_federal_register(content: bytes, source: str, seen_at: pd.Timestamp) -> list[Item]:
     """These carry a date with no time, and midnight would make today's document look half a day
-    old. The query looks back only two days, so the time of first sight is close enough."""
+    old. The query looks back only a day, so the time of first sight is close enough."""
     rows = [make_item(seen_at, seen_at, source, OFFICIAL, d.get("title"), d.get("html_url"))
             for d in json.loads(content)["results"]]
     return [r for r in rows if r]
@@ -181,19 +181,22 @@ def parse_telegram(content: bytes, channel: str, seen_at: pd.Timestamp) -> list[
 
 
 def search_name(asset: Item) -> str:
-    """The name news uses: 'NVIDIA CORP' is written 'NVIDIA'. Measured on one day of Google News, a
-    ticker alone found 0 to 44% relevant headlines for SOL, NEAR, LINK and T; the name found 41 to 98%."""
+    """The name news uses: 'WELLS FARGO & COMPANY/MN' is written 'WELLS FARGO'. Measured on one day
+    of Google News, a ticker alone found 0 to 44% relevant headlines for SOL, NEAR, LINK and T; the
+    name found 41 to 98%. Only stocks are trimmed, since a coin's name is already the plain one."""
     name = str(asset["name"]).strip()
-    while COMPANY_SUFFIX.search(name):
-        name = COMPANY_SUFFIX.sub("", name)
+    if asset.get("kind") == "crypto":
+        return name
+    while (shorter := COMPANY_SUFFIX.sub("", name)) != name and shorter:
+        name = shorter
     return name
 
 
-def _for_asset(rows: list[Item], asset: Item, check_name: bool = True) -> list[Item]:
+def _for_asset(rows: list[Item], asset: Item) -> list[Item]:
     """Tag items with the asset, keeping only headlines that really name it."""
     name, ticker = search_name(asset), str(asset["ticker"])
-    kept = [r for r in rows if not check_name or mentions(r["title"], name, ticker)]
-    return [{**r, "kind": WATCH, "watch": ticker} for r in kept]
+    return [{**r, "kind": WATCH, "watch": asset["id"], "ticker": ticker} for r in rows
+            if mentions(r["title"], name, ticker)]
 
 
 def parse_google(content: bytes, seen_at: pd.Timestamp) -> list[Item]:
@@ -223,8 +226,11 @@ def _yahoo(asset: Item) -> Source:
 def _filings(asset: Item) -> Source:
     query = urlencode({"action": "getcompany", "CIK": asset["source_id"], "type": "8-K", "count": 10,
                        "output": "atom"})
-    return lambda fetch, now: _for_asset(parse_feed(fetch(f"{SEC_COMPANY}?{query}"), "sec_8k", WATCH, now),
-                                         asset, check_name=False)
+    def source(fetch: Fetch, now: pd.Timestamp) -> list[Item]:
+        rows = parse_feed(fetch(f"{SEC_COMPANY}?{query}"), "sec_8k", WATCH, now)
+        named = [{**r, "title": f"{search_name(asset)}: {r['title']}"} for r in rows]  # the feed omits it
+        return _for_asset(named, asset)
+    return source
 
 
 def asset_sources(watchlist: list[Item]) -> dict[str, Source]:
@@ -243,7 +249,7 @@ def _feed(name: str, kind: str, url: str) -> Source:
 
 def _federal_register(name: str, doc_type: str) -> Source:
     def source(fetch: Fetch, now: pd.Timestamp) -> list[Item]:
-        since = (now - pd.Timedelta("2D")).strftime("%Y-%m-%d")
+        since = (now - pd.Timedelta("1D")).strftime("%Y-%m-%d")  # inside the news file's 48 hours
         query = urlencode({"per_page": 100, "order": "newest", "conditions[type][]": doc_type,
                            "conditions[publication_date][gte]": since})
         return parse_federal_register(fetch(f"{FEDERAL_REGISTER}?{query}"), name, now)

@@ -276,10 +276,14 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     if not providers:
         log.warning("no GEMINI_API_KEY or GROQ_API_KEY: collecting without scoring")
     store = _store(args)
-    watchlist = store.select("watchlist")
+    try:
+        watchlist = store.select("watchlist")
+    except Exception as exc:  # followed assets are extra: the general run must go on without them
+        log.warning("no watchlist this run: %s", type(exc).__name__)
+        watchlist = []
     report = run(store, all_sources(channels, watchlist), providers, settings.news, now,
                  clock=lambda: pd.Timestamp.now(tz="UTC"),
-                 watched={str(a["ticker"]): search_name(a) for a in watchlist})
+                 watched={str(a["id"]): search_name(a) for a in watchlist})
     failed = [name for name, count in report.counts.items() if count < 0]
     print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
           f"pending={report.pending} failed={failed}")

@@ -12,7 +12,7 @@ import { useNow } from "@/lib/useNow";
 import { useRows } from "@/lib/useRows";
 
 const DAYS = 7;
-const MAX_STORIES = DAYS * 500; // the news job scores at most 500 a day, so this never cuts the week
+const MAX_STORIES = DAYS * 1500; // the news job scores at most 1500 a day, so this never cuts the week
 const LEVEL_MAX_AGE_MS = 3_600_000; // the same limit the test agents apply
 const REFRESH_MS = 3_600_000; // a week of stories is the heavy read: an open tab repeats it hourly at most
 const FRESH_SUBSCRIPTION_MS = 900_000; // after subscribing, every news run counts: the first stories are due
@@ -203,7 +203,8 @@ export default function NewsPage() {
   }, [news.rows, view, asset, channel, topic, query]);
 
   const assetFilters = Object.entries(ASSET_FILTERS).concat(
-    watchlist.rows.filter((w) => !(w.ticker in ASSET_FILTERS)).map((w): [string, string] => [w.ticker, w.ticker]),
+    [...new Set(watchlist.rows.map((w) => w.ticker))].filter((t) => !(t in ASSET_FILTERS))
+      .map((t): [string, string] => [t, t]),
   );
   const cards = SCOPE_ORDER.flatMap((scope) => levels.rows.filter((r) => r.scope === scope));
 
@@ -228,8 +229,12 @@ export default function NewsPage() {
         onSubscribed={(ticker) => {
           subscribedAt.current = Date.now();
           setAsset(ticker);
+          setView("all"); // a new asset's routine stories are what is there to see at first
         }}
-        onRemoved={(ticker) => setAsset((current) => (current === ticker ? "all" : current))}
+        onRemoved={(row) => {
+          const stillFollowed = watchlist.rows.some((w) => w.id !== row.id && w.ticker === row.ticker);
+          if (!stillFollowed) setAsset((current) => (current === row.ticker ? "all" : current));
+        }}
       />
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">

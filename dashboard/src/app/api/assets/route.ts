@@ -62,11 +62,13 @@ async function stocks(ticker: string): Promise<AssetCandidate[]> {
   const company = Object.values(all).find((c) => c.ticker.toUpperCase() === ticker);
   if (!company) return [];
   const quote = await json<{ chart: { result: { meta: { regularMarketPrice?: number; currency?: string;
-    fullExchangeName?: string } }[] } }>(
+    fullExchangeName?: string; longName?: string } }[] } }>(
     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?range=1d&interval=1d`,
   ).then((r) => r.chart.result[0].meta).catch(() => null);
   return [{
-    id: `stock:${ticker}`, kind: "stock", ticker, name: company.title, source_id: String(company.cik_str),
+    // Yahoo writes 'JPMorgan Chase & Co.' where the SEC has 'JPMORGAN CHASE & CO': closer to headlines.
+    id: `stock:${ticker}`, kind: "stock", ticker, name: quote?.longName ?? company.title,
+    source_id: String(company.cik_str),
     price: quote?.regularMarketPrice ?? null, market_cap: null, volume: null, rank: null,
     exchange: quote?.fullExchangeName ?? null, currency: quote?.currency ?? "USD",
   }];

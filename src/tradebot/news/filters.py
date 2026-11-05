@@ -57,7 +57,8 @@ def mentions(title: str, name: str, ticker: str) -> bool:
     """Whether a headline names the asset. A bare ticker proves nothing: LINK, NEAR and T are words,
     so a ticker counts only when written as one, like $SOL or (SOL)."""
     written = rf"\${re.escape(ticker)}\b|\({re.escape(ticker)}\)"
-    return bool(re.search(rf"\b{re.escape(name)}\b|{written}", title, re.I))
+    plain = re.sub(r"['’]", "", title)  # filings write MCDONALDS, headlines McDonald's
+    return bool(re.search(rf"\b{re.escape(name)}\b|{written}", plain, re.I))
 
 
 def suspicious(title: str) -> bool:

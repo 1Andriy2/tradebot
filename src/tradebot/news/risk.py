@@ -87,6 +87,7 @@ def assess(scored: pd.DataFrame, now: pd.Timestamp, stale: bool) -> list[dict[st
     first report that expired before anything rated the story.
     """
     dated = scored.assign(born=story_times(scored))
+    # What the user happens to follow must not change the experiment.
     recent = dated[(dated["born"] > now - WINDOW) & (dated["impact"].abs() >= MIN_IMPACT)
-                   & (dated["confidence"] >= MIN_CONFIDENCE)]
+                   & (dated["confidence"] >= MIN_CONFIDENCE) & (dated["kind"] != "watch")]
     return [assess_scope(scope, recent, now, stale) for scope in SCOPES]

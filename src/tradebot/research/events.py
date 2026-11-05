@@ -122,7 +122,8 @@ def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataF
         mine = scored[(scored["prompt_version"] == PROMPT_VERSION) & (scored["model"] == model)
                       & (scored["confidence"] >= MIN_CONFIDENCE)
                       & scored["assets"].map(lambda a: bool(wanted & set(a.split(",")))).astype(bool)]
-        mine = mine[mine["status"] == "scored"]  # the story's own row, which alone has a rating time
+        # The story's own row, which alone has a rating time. Followed assets stay out of the test.
+        mine = mine[(mine["status"] == "scored") & (mine["kind"] != "watch")]
         known = mine[["first_seen", "scored_at"]].max(axis=1)
         tests["llm_bad_news"] = _hours(known[mine["impact"] <= -STRONG_IMPACT])
         tests["llm_good_news"] = _hours(known[mine["impact"] >= STRONG_IMPACT])
