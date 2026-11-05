@@ -950,7 +950,7 @@ def aged(*ages: str) -> pd.DataFrame:
 
 def test_fresh_rows_are_left_alone_and_nothing_is_written() -> None:
     store = MemoryStore()
-    frame = aged("1h", "3D")
+    frame = aged("1h", "2D")
     assert len(archive.rotate(store, "x", frame, "ts", LATER)) == 2 and store.files == {}
 
 
@@ -1007,6 +1007,31 @@ def test_research_sees_archives_and_the_hot_file_together() -> None:
     archive.write_file(store, pipeline.SCORED_FILE, aged("1h"))
     scored, levels = _news_tables(store, LATER)
     assert len(scored) == 2 and levels.empty
+
+
+def test_items_judged_worthless_are_not_kept_and_cost_no_call_when_seen_again() -> None:
+    def fail(system: str, user: str) -> str:
+        raise AssertionError("model called")
+
+    store = MemoryStore()
+    old = news_item("Bitcoin crash", "https://x.example/1", published=NOW - pd.Timedelta("2D"))
+    dull = news_item("Local bakery opens", "https://x.example/2")
+    for _ in range(3):
+        pipeline.run(store, static([old, dull]), [scoring.Provider("m", fail)], CFG, NOW)
+    assert pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.SCORED_FILE}"])).empty
+
+
+def test_a_rejected_off_topic_story_is_remembered_so_it_is_not_rated_again() -> None:
+    def off(system: str, user: str) -> str:
+        calls.append(user)
+        return json.dumps({"results": [{**answer(id=json.loads(user)[0]["id"]), "about_asset": False}]})
+
+    calls: list[str] = []
+    store = MemoryStore()
+    item = watched_item()
+    for _ in range(2):
+        pipeline.run(store, static([item]), [scoring.Provider("m", off)], CFG, NOW, watched={"SOL": "Solana"})
+    assert len(calls) == 1
 
 
 def test_a_hot_file_stays_small_over_many_runs() -> None:

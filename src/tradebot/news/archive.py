@@ -18,8 +18,8 @@ from tradebot.store import Store
 log = logging.getLogger(__name__)
 
 BUCKET = "data"
-HOT = pd.Timedelta("3D")  # longer than anything a run needs: 48h of story matching, 24h of levels
-ROTATE_AFTER = pd.Timedelta("4D")  # so a rotation happens daily, not on every run
+HOT = pd.Timedelta("2D")  # as long as a run needs: 48h of story matching, 24h of levels
+ROTATE_AFTER = pd.Timedelta("3D")  # so a rotation happens daily, not on every run
 FIRST_MONTH = pd.Period("2026-11", "M")
 
 

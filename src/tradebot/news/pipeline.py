@@ -35,6 +35,9 @@ PENDING, SCORED, DUPLICATE, IGNORED, OLD, EXPIRED, SUSPICIOUS, OFF_TOPIC = (
 MAX_AGE = pd.Timedelta("24h")  # older than this on first sight: not news any more
 RETRY_FOR = pd.Timedelta("6h")  # an item the model never answered for stops being worth a call
 SAME_STORY_WINDOW = pd.Timedelta("48h")
+# What a run must remember. The rest costs nothing to judge again, and keeping it made the file that is
+# fetched 3000 times a month several times larger: measured, 26 GB a month against 5 GB allowed.
+REMEMBERED = [PENDING, SCORED, DUPLICATE, EXPIRED, OFF_TOPIC]
 STALE_AFTER = pd.Timedelta("1h")  # scoring this far behind means the risk level cannot be trusted
 STALE_BACKLOG = 5  # a few items the model will not answer must not switch the whole filter off
 REPUBLISH = pd.Timedelta("6h")  # a failed write to the page's tables is repaired within this time
@@ -253,7 +256,7 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     stale = behind or report.sources_ok == 0
     report.risk = assess(frame, done, stale)
     report.changes = level_changes(risk, report.risk)
-    rows = pd.DataFrame(report.risk)
+    rows = pd.DataFrame(report.risk).drop(columns="top")  # headlines go to events, not this file
     return frame, rows if risk.empty else pd.concat([risk, rows], ignore_index=True), report
 
 
@@ -272,6 +275,7 @@ def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg
 
     scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch, clock, watched)
     publish(store, scored, report, now)
+    scored = scored[scored["status"].isin(REMEMBERED)]
     scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
     risk = rotate(store, RISK_STEM, risk, "ts", now)
     write_file(store, SCORED_FILE, scored)
