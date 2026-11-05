@@ -99,11 +99,18 @@ def _hours(stamps: pd.Series) -> pd.Series:
     return pd.Series(True, index=pd.DatetimeIndex(stamps).floor("1h").unique())
 
 
+def _starts(active: pd.Series) -> pd.Series:
+    """True where an episode begins."""
+    return active & ~active.shift(1, fill_value=False).astype(bool)
+
+
 def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataFrame, coin: str, model: str,
                         horizons: tuple[int, ...] = (4, 24)) -> list[dict[str, Any]]:
     """Does price move after the model's strong ratings, and after the filter cuts a side?
 
-    Time is ``first_seen``, when the bot really knew. Each story counts once, and only scores from
+    A rating counts from when it existed, the later of ``first_seen`` and ``scored_at``. A filter
+    episode counts once, at its start, since hours inside it are not independent. Each story counts
+    once too, and only scores from
     the current prompt and ``model`` count, because other scores are not comparable: the fallback
     model rates the same news differently. Levels mix both models, as the bot would have seen them.
     This is the test the filter must pass before it may touch the demo account.
@@ -115,12 +122,13 @@ def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataF
                       & (scored["confidence"] >= MIN_CONFIDENCE)
                       & scored["assets"].map(lambda a: bool(SCOPES[scope] & set(a.split(",")))).astype(bool)]
         mine = mine.sort_values("first_seen").drop_duplicates("cluster")
-        tests["llm_bad_news"] = _hours(mine.loc[mine["impact"] <= -STRONG_IMPACT, "first_seen"])
-        tests["llm_good_news"] = _hours(mine.loc[mine["impact"] >= STRONG_IMPACT, "first_seen"])
+        known = mine[["first_seen", "scored_at"]].max(axis=1)
+        tests["llm_bad_news"] = _hours(known[mine["impact"] <= -STRONG_IMPACT])
+        tests["llm_good_news"] = _hours(known[mine["impact"] >= STRONG_IMPACT])
     if len(levels):
-        mine = levels[(levels["scope"] == scope) & ~levels["stale"].astype(bool)]
-        tests["filter_cut_longs"] = _hours(mine.loc[mine["long_mult"] < 1, "ts"])
-        tests["filter_cut_shorts"] = _hours(mine.loc[mine["short_mult"] < 1, "ts"])
+        mine = levels[(levels["scope"] == scope) & ~levels["stale"].astype(bool)].sort_values("ts")
+        tests["filter_cut_longs"] = _hours(mine.loc[_starts(mine["long_mult"] < 1), "ts"])
+        tests["filter_cut_shorts"] = _hours(mine.loc[_starts(mine["short_mult"] < 1), "ts"])
     out = []
     for name in ("llm_bad_news", "llm_good_news", "filter_cut_longs", "filter_cut_shorts"):
         for horizon in horizons:
@@ -132,7 +140,7 @@ def scored_news_studies(close: pd.Series, scored: pd.DataFrame, levels: pd.DataF
 
 
 def add_q_values(rows: list[dict[str, Any]]) -> None:
-    """Benjamini-Hochberg across the tested rows of one run."""
+    """Benjamini-Hochberg across the tested rows given. Pass every row of a run for the final q."""
     from tradebot.research.patterns import bh_qvalues
 
     tested = [r for r in rows if r["status"] == "tested"]

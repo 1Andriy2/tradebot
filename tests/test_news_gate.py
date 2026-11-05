@@ -11,8 +11,9 @@ from tests.test_live import FakePublic, FakeVenue
 from tradebot.agents import Agent, news_twin
 from tradebot.config import RiskParams, Settings
 from tradebot.live.runner import Trader
+from tradebot.news.archive import BUCKET
 from tradebot.news.gate import exposure_scale
-from tradebot.news.pipeline import BUCKET, RISK_FILE
+from tradebot.news.pipeline import RISK_FILE
 from tradebot.policy import DecisionPolicy, PolicyState
 from tradebot.risk import RiskManager
 from tradebot.store import MemoryStore
@@ -169,11 +170,37 @@ def test_scale_shrinks_the_position_and_restores_it() -> None:
     assert back is not None and back.target_units == pytest.approx(full.target_units)
 
 
+@pytest.mark.parametrize(("price", "equity"), [(25.0, 9_700.0), (400.0, 40_000.0)])
+def test_a_cut_and_release_never_leaves_more_than_the_signal_asked_for(price: float, equity: float) -> None:
+    """Regression: resizing from current equity and price could end above the original position."""
+    policy = DecisionPolicy(RiskManager(RiskParams()))
+    state = policy.new_state(10_000.0)
+    entry = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0)
+    assert entry is not None
+    cut = policy.decide(state, DAY, equity, 1.0, price, entry.target_units, 0.5)
+    assert cut is not None and cut.target_units == pytest.approx(entry.target_units / 2)
+    back = policy.decide(state, DAY, equity, 1.0, price, cut.target_units, 1.0)
+    assert back is not None and back.target_units == pytest.approx(entry.target_units)
+
+
+def test_a_fully_cut_position_comes_back_at_its_own_size() -> None:
+    policy = DecisionPolicy(RiskManager(RiskParams()))
+    state = policy.new_state(10_000.0)
+    entry = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, 0.0)
+    assert entry is not None
+    out = policy.decide(state, DAY, 10_000.0, 1.0, 100.0, entry.target_units, 0.0)
+    assert out is not None and out.target_units == 0.0
+    assert policy.decide(state, DAY, 20_000.0, 1.0, 50.0, 0.0, 0.0) is None
+    back = policy.decide(state, DAY, 20_000.0, 1.0, 50.0, 0.0, 1.0)
+    assert back is not None and back.target_units == pytest.approx(entry.target_units)
+
+
 def test_state_saved_before_scale_existed_still_loads() -> None:
     policy, state = stopped_policy()
     saved = state.to_dict()
-    del saved["prev_scale"]
-    assert PolicyState.from_dict(saved).prev_scale == 1.0
+    del saved["prev_scale"], saved["base_units"]
+    loaded = PolicyState.from_dict(saved)
+    assert loaded.prev_scale == 1.0 and loaded.base_units == 0.0
 
 
 def test_the_twin_never_trades_on_the_demo_account() -> None:
@@ -187,6 +214,22 @@ def test_missing_levels_do_not_stop_the_step() -> None:
     bot.public.add_bar(100.0)
     assert bot.step().errors == []
     assert store.select("decisions", {"agent_id": "news_ma_cross"})[-1]["signal"] == 1.0
+
+
+def test_a_failed_download_keeps_a_cut_in_force() -> None:
+    """Regression: an outage read as 'no news' and put the twin back at full size."""
+    store, bot = run_with_levels(0.0)
+    (row,) = store.select("agent_state", {"agent_id": "news_ma_cross"})
+    assert row["state"]["policy"]["prev_scale"] == 0.0
+    store.files.clear()
+
+    def outage(bucket: str, path: str) -> bytes:
+        raise RuntimeError("503")
+
+    store.download = outage  # type: ignore[method-assign]
+    bot.public.add_bar(100.0)
+    assert bot.step().errors == []
+    assert store.select("decisions", {"agent_id": "news_ma_cross"})[-1]["signal"] == 0.0
 
 
 def test_a_corrupt_levels_file_does_not_stop_the_step() -> None:

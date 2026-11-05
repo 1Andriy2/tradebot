@@ -74,7 +74,7 @@ class Trader:
         self.last_price: dict[str, float] = {}
         self._long_history: dict[tuple[str, int], pd.DataFrame] = {}
         self.roster = list(self.agents)
-        self.news_levels = pd.DataFrame()
+        self.news_levels: pd.DataFrame | None = None  # None: unknown this step, not "no news"
 
     # ---------- public API ----------
 
@@ -122,7 +122,7 @@ class Trader:
             self.news_levels = load_levels(self.store)
         except Exception as exc:
             log.warning("no news levels this step: %s", type(exc).__name__)
-            self.news_levels = pd.DataFrame()
+            self.news_levels = None
 
     def _error(self, report: StepReport, msg: str, agent_id: str | None = None) -> None:
         log.exception("step failed: %s", msg)
@@ -157,9 +157,11 @@ class Trader:
             self._long_history[key] = fetch_ohlcv_range(self.public, symbol, self.tf, since)
         return agent.strategy.signal(self._long_history[key]).reindex(df.index, method="ffill")
 
-    def _news_scale(self, agent: Agent, symbol: str, signal: pd.Series) -> pd.Series:
+    def _news_scale(self, agent: Agent, symbol: str, signal: pd.Series, state: PolicyState) -> pd.Series:
         if not agent.news_gated:
             return pd.Series(1.0, index=signal.index)
+        if self.news_levels is None:  # a failed download must not undo a cut that is in force
+            return pd.Series(state.prev_scale, index=signal.index)
         bar = pd.Timedelta(seconds=self.public.parse_timeframe(self.tf))
         return exposure_scale(signal, self.news_levels, symbol.split("/")[0], bar)
 
@@ -203,7 +205,7 @@ class Trader:
         decisions = []
         o, h, lo, c = (df[k].to_numpy(float) for k in ("open", "high", "low", "close"))
         sig_v, atr_v = signal.to_numpy(float), atr.to_numpy(float)
-        scale_v = self._news_scale(agent, symbol, signal).to_numpy(float)
+        scale_v = self._news_scale(agent, symbol, signal, state).to_numpy(float)
         for i in range(len(df) - len(new), len(df)):  # new bars are the tail of df
             ts = df.index[i]
             bar = Bar(ts, ts.date(), o[i], h[i], lo[i], c[i], float(sig_v[i]),

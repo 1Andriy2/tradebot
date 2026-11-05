@@ -19,6 +19,7 @@ class PolicyState:
     risk: RiskState
     prev_sig: float = 0.0
     prev_scale: float = 1.0
+    base_units: float = 0.0  # position the signal asked for, before any scale
     suppressed_sig: float | None = None  # after a stop, wait for the signal to change
     sl: float | None = None
     tp: float | None = None
@@ -39,6 +40,7 @@ class PolicyState:
             r[key] = date.fromisoformat(r[key]) if r.get(key) else None
         r["events"] = []
         return cls(risk=RiskState(**r), prev_sig=d["prev_sig"], prev_scale=d.get("prev_scale", 1.0),
+                   base_units=d.get("base_units", 0.0),
                    suppressed_sig=d["suppressed_sig"],
                    sl=d.get("sl"), tp=d.get("tp"), extra=d.get("extra", {}))
 
@@ -67,7 +69,8 @@ class DecisionPolicy:
         """Called at a bar close. Returns a new target, or None to keep the current position.
 
         ``scale`` shrinks the position, not the signal, so a change in it cannot end the wait after
-        a stop and open a position the strategy itself would not hold.
+        a stop and open a position the strategy itself would not hold. It works on the size the
+        signal last asked for, so a cut and a release can never leave a position larger than that.
         """
         signal = max(-1.0, min(1.0, signal))
         block = self.risk.check(state.risk, day, equity)
@@ -77,10 +80,13 @@ class DecisionPolicy:
         target, reason = units, "signal"
         if block:
             target, reason = 0.0, block
-        elif state.suppressed_sig is None and (
-            signal != state.prev_sig or scale != state.prev_scale or (abs(units) < EPS and signal != 0)
-        ):
-            target = self.risk.target_units(signal * scale, equity, price)
+        elif state.suppressed_sig is None:
+            unscaled = scale == 1.0 and state.prev_scale == 1.0
+            if signal != state.prev_sig or (unscaled and abs(units) < EPS and signal != 0):
+                state.base_units = self.risk.target_units(signal, equity, price)
+                target = state.base_units * scale
+            elif scale != state.prev_scale:
+                target = state.base_units * scale
         state.prev_sig = signal
         state.prev_scale = scale
         # Hard cap on every bar: a position may outgrow the cap (equity drop, price move,

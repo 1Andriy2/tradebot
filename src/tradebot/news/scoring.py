@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 
 PROMPT_VERSION = "2"  # bump on any prompt change: scores from different prompts are not comparable
 BATCH = 20
-TIMEOUT = 90
+TIMEOUT = 45
 ASSET = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 MAX_ASSETS = 8
 

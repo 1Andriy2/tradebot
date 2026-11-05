@@ -31,6 +31,10 @@ export const ASSETS: Record<string, string> = { CRYPTO: "Крипторинок"
 
 export const SCOPES: Record<string, string> = { BTC: "Bitcoin", ETH: "Ethereum", STOCKS: "Акції США" };
 
+export const SHORTS_ONLY_HINT = "Сильні позитивні новини: обмежено лише шорти";
+
+export const fmtMult = (v: number): string => `×${v.toLocaleString("uk-UA", { maximumFractionDigits: 2 })}`;
+
 export const LEVELS: Record<NewsLevel, { label: string; hint: string; tone: string; dot: string }> = {
   trade: {
     label: "Торгувати",

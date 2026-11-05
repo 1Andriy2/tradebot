@@ -176,12 +176,17 @@ def _study_events(settings: Settings, store: Store, now: pd.Timestamp) -> list[d
     """Tests of the liquidation and news ideas on whatever has been collected so far."""
     from tradebot.data.market_stats import hourly_liquidations, liquidations_path, stats_path
     from tradebot.data.news import news_path
-    from tradebot.research.events import liquidation_studies, news_studies, scored_news_studies
+    from tradebot.research.events import (
+        add_q_values,
+        liquidation_studies,
+        news_studies,
+        scored_news_studies,
+    )
 
     scored, levels = _news_tables(store, now)
     path = news_path(settings.data_path)
     news = pd.read_parquet(path) if path.exists() else pd.DataFrame()
-    rows = []
+    done: list[tuple[str, dict[str, Any]]] = []
     for symbol in settings.markets.symbols:
         liq_path = liquidations_path(settings.data_path, symbol)
         stat_path = stats_path(settings.data_path, symbol)
@@ -192,10 +197,10 @@ def _study_events(settings: Settings, store: Store, now: pd.Timestamp) -> list[d
         studies = liquidation_studies(close, hourly_liquidations(liquidations), stats)
         studies += news_studies(close, news, coin)
         studies += scored_news_studies(close, scored, levels, coin, settings.news.gemini_model)
-        for study in studies:
-            rows.append({"ts": now, "type": "event_study", "message": f"{symbol} {study['test']}",
-                         "details": {"symbol": symbol, **study}})
-    return rows
+        done += [(symbol, study) for study in studies]
+    add_q_values([study for _, study in done])  # over the whole night, not one coin or idea at a time
+    return [{"ts": now, "type": "event_study", "message": f"{symbol} {study['test']}",
+             "details": {"symbol": symbol, **study}} for symbol, study in done]
 
 
 def _scenario_events(dfs: dict[str, pd.DataFrame], now: pd.Timestamp) -> list[dict[str, Any]]:
@@ -266,7 +271,7 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     providers = providers_from_env(settings.news)
     if not providers:
         log.warning("no GEMINI_API_KEY or GROQ_API_KEY: collecting without scoring")
-    report = run(settings.data_path, _store(args), sources, providers, settings.news, now)
+    report = run(_store(args), sources, providers, settings.news, now)
     failed = [name for name, count in report.counts.items() if count < 0]
     print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
           f"pending={report.pending} failed={failed}")

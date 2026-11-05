@@ -11,13 +11,12 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
 
 from tradebot.config import NewsConfig
-from tradebot.news.archive import BUCKET, is_missing, rotate
+from tradebot.news.archive import read_file, rotate, write_file
 from tradebot.news.filters import relevant, same_story, suspicious, words
 from tradebot.news.risk import assess
 from tradebot.news.scoring import PROMPT_VERSION, Assessment, Provider, score
@@ -100,7 +99,8 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
     """New items only, each with a status. A repeat of a recent story joins that story's cluster."""
     seen = set(known["url"])
     recent = known[(known["first_seen"] > now - SAME_STORY_WINDOW) & known["status"].isin([PENDING, SCORED])]
-    stories = [(words(t), c) for t, c in zip(recent["title"], recent["cluster"], strict=True)]
+    stories = [(words(t), c, s, k) for t, c, s, k in
+               zip(recent["title"], recent["cluster"], recent["status"], recent["kind"], strict=True)]
     rows = []
     geo_left = GEO_STORIES_PER_RUN
     for item in items:
@@ -110,16 +110,26 @@ def ingest(known: pd.DataFrame, items: list[Item], now: pd.Timestamp) -> pd.Data
         status, cluster = first_status(item, now), story_id(item["url"])
         if status == PENDING:
             tokens = words(item["title"])
-            match = next((c for other, c in stories if same_story(tokens, other)), None)
+            rank = PRIORITY.get(item["kind"], 9)
+            # A story still waiting behind this one must not hold a higher-priority source back.
+            match = next((c for other, c, state, kind in stories if same_story(tokens, other)
+                          and (state == SCORED or PRIORITY.get(kind, 9) <= rank)), None)
             if match is not None:
                 status, cluster = DUPLICATE, match
             elif item["kind"] != "geo" or geo_left > 0:
-                stories.append((tokens, cluster))
+                stories.append((tokens, cluster, PENDING, item["kind"]))
                 geo_left -= item["kind"] == "geo"
             else:
                 status = IGNORED
         rows.append({**item, "status": status, "cluster": cluster})
     return typed(pd.DataFrame(rows, columns=COLUMNS))
+
+
+def promote_repeats(frame: pd.DataFrame) -> None:
+    """If a story's first item expired unrated, its oldest repeat takes over, so it still gets a chance."""
+    alive = frame.loc[frame["status"].isin([PENDING, SCORED]), "cluster"]
+    orphans = frame[(frame["status"] == DUPLICATE) & frame["impact"].isna() & ~frame["cluster"].isin(alive)]
+    frame.loc[orphans.drop_duplicates("cluster").index, "status"] = PENDING
 
 
 def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.DataFrame:
@@ -181,10 +191,14 @@ def publish(store: Store, frame: pd.DataFrame, report: NewsRun, now: pd.Timestam
 
 
 def level_changes(previous: pd.DataFrame, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Dashboard events for markets whose level differs from the last run."""
-    last = previous.sort_values("ts").groupby("scope")["level"].last().to_dict() if len(previous) else {}
+    """Dashboard events for markets whose level, or the side it cuts, differs from the last run."""
+    calm = ("trade", 1.0, 1.0)
+    last: dict[str, tuple[str, float, float]] = {}
+    if len(previous):
+        latest = previous.sort_values("ts").groupby("scope").last()
+        last = {str(s): (r["level"], r["long_mult"], r["short_mult"]) for s, r in latest.iterrows()}
     return [{"ts": r["ts"], "type": "news_risk", "message": f"{r['scope']}: {r['level']}", "details": r}
-            for r in rows if last.get(r["scope"], "trade") != r["level"]]
+            for r in rows if last.get(r["scope"], calm) != (r["level"], r["long_mult"], r["short_mult"])]
 
 
 def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
@@ -196,6 +210,7 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     frame = fresh if scored.empty else pd.concat([scored, fresh]) if len(fresh) else scored
     frame = frame.reset_index(drop=True)
     frame.loc[(frame["status"] == PENDING) & (frame["first_seen"] < now - RETRY_FOR), "status"] = EXPIRED
+    promote_repeats(frame)
 
     batch = to_score(frame, now, cfg)
     payload = [{"id": int(i), "kind": k, "text": t}
@@ -216,35 +231,23 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     return frame, rows if risk.empty else pd.concat([risk, rows], ignore_index=True), report
 
 
-def _pull(store: Store, path: Path) -> None:
-    """Fetch a file. Only a file that does not exist yet may start empty: treating any other
-    failure as empty would upload an empty table over the whole history."""
-    try:
-        path.write_bytes(store.download(BUCKET, path.name))
-    except Exception as exc:
-        if not is_missing(exc):
-            raise
-        log.info("no %s yet, starting empty", path.name)
+def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg: NewsConfig,
+        now: pd.Timestamp, fetch: Fetch = download) -> NewsRun:
+    """Read both tables, do one pass, write them back, and log level changes.
 
-
-def run(data_dir: Path, store: Store, sources: dict[str, Source], providers: list[Provider],
-        cfg: NewsConfig, now: pd.Timestamp, fetch: Fetch = download) -> NewsRun:
-    """Pull both tables, do one pass, push them back, and log level changes."""
-    data_dir.mkdir(parents=True, exist_ok=True)
-    scored_path, risk_path = data_dir / SCORED_FILE, data_dir / RISK_FILE
-    for path in (scored_path, risk_path):
-        path.unlink(missing_ok=True)
-        _pull(store, path)
-    scored = typed(pd.read_parquet(scored_path)) if scored_path.exists() else typed(pd.DataFrame())
-    risk = pd.read_parquet(risk_path) if risk_path.exists() else pd.DataFrame()
+    Only a file that does not exist yet starts empty. Any other failure to read stops the run:
+    going on would upload an empty table over the whole history.
+    """
+    known = read_file(store, SCORED_FILE)
+    scored = typed(pd.DataFrame() if known is None else known)
+    risk = read_file(store, RISK_FILE)
+    risk = pd.DataFrame() if risk is None else risk
 
     scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch)
     publish(store, scored, report, now)
     scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
     risk = rotate(store, RISK_STEM, risk, "ts", now)
-    scored.to_parquet(scored_path)
-    risk.to_parquet(risk_path)
-    for path in (scored_path, risk_path):
-        store.upload(BUCKET, path.name, path.read_bytes())
+    write_file(store, SCORED_FILE, scored)
+    write_file(store, RISK_FILE, risk)
     store.insert("events", report.changes)
     return report

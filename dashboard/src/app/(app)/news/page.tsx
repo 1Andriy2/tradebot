@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, ErrorNote, PageTitle } from "@/components/ui";
 import {
-  ago, ASSETS, assetList, byDay, CHANNELS, EVENT_TYPES, fmtClock, fmtImpact, LEVELS, outletName, safeUrl,
-  SCOPES, SIGNIFICANT, STANCES, storyTime, strength,
+  ago, ASSETS, assetList, byDay, CHANNELS, EVENT_TYPES, fmtClock, fmtImpact, fmtMult, LEVELS, outletName,
+  safeUrl, SCOPES, SHORTS_ONLY_HINT, SIGNIFICANT, STANCES, storyTime, strength,
 } from "@/lib/news";
 import type { NewsItemRow, NewsLevelRow } from "@/lib/types";
 import { useNow } from "@/lib/useNow";
@@ -67,6 +67,7 @@ function Pressure({ label, value, color }: { label: string; value: number; color
 function LevelCard({ row, now }: { row: NewsLevelRow; now: number }) {
   const expired = now > 0 && now - new Date(row.updated_at).getTime() > LEVEL_MAX_AGE_MS;
   const level = expired ? LEVELS.unknown : LEVELS[row.level] ?? LEVELS.unknown;
+  const shortsOnly = !expired && row.long_mult === 1 && row.short_mult < 1;
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-baseline justify-between gap-2">
@@ -77,12 +78,13 @@ function LevelCard({ row, now }: { row: NewsLevelRow; now: number }) {
         <span aria-hidden className={`h-2.5 w-2.5 rounded-full ${level.dot}`} />
         {level.label}
       </div>
-      <p className="mt-1 min-h-10 text-sm text-slate-600 dark:text-slate-400">{level.hint}</p>
+      <p className="mt-1 min-h-10 text-sm text-slate-600 dark:text-slate-400">{shortsOnly ? SHORTS_ONLY_HINT : level.hint}</p>
       <div className="mt-3 space-y-1.5">
         <Pressure label="Негатив" value={row.negative} color="bg-rose-500" />
         <Pressure label="Позитив" value={row.positive} color="bg-emerald-500" />
       </div>
       <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+        {!expired && <>Лонги {fmtMult(row.long_mult)}, шорти {fmtMult(row.short_mult)} · </>}
         Подій за добу: {row.events}, джерел: {row.sources}
       </p>
     </section>
@@ -159,7 +161,7 @@ export default function NewsPage() {
   const [query, setQuery] = useState("");
 
   const news = useRows<NewsItemRow>("news_items", {
-    order: { column: "first_seen" }, limit: MAX_STORIES, sinceDays: { column: "first_seen", days: DAYS },
+    order: { column: "first_seen", tiebreak: "cluster" }, limit: MAX_STORIES, sinceDays: { column: "first_seen", days: DAYS },
   });
   const levels = useRows<NewsLevelRow>("news_levels", { realtime: true });
 
@@ -169,9 +171,12 @@ export default function NewsPage() {
   const loadedFor = useRef<string | undefined>(undefined);
   useEffect(() => {
     const refresh = () => {
-      if (!updatedAt || updatedAt === loadedFor.current || document.visibilityState !== "visible") return;
-      if (loadedFor.current) void reload();
-      loadedFor.current = updatedAt;
+      if (!updatedAt || updatedAt === loadedFor.current) return;
+      if (!loadedFor.current) loadedFor.current = updatedAt; // the first load already has this run
+      else if (document.visibilityState === "visible") {
+        loadedFor.current = updatedAt;
+        void reload();
+      }
     };
     refresh();
     document.addEventListener("visibilitychange", refresh);

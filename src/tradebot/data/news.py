@@ -11,6 +11,7 @@ from __future__ import annotations
 import email.utils
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ FEEDS = {
     "theblock": "https://www.theblock.co/rss.xml",
 }
 MAX_FEED_BYTES = 5_000_000
+MAX_FETCH_SECONDS = 60  # the client's timeout is per read, so a trickling server needs its own limit
 MAX_TITLE = 300
 COLUMNS = ["published", "first_seen", "source", "title", "url", "btc", "eth", "tone"]
 
@@ -71,11 +73,13 @@ def fetch_feed(url: str, limit: int = MAX_FEED_BYTES) -> bytes:
     with httpx.stream("GET", url, timeout=20, follow_redirects=True,
                       headers={"User-Agent": "tradebot-research/1.0"}) as response:
         response.raise_for_status()
-        chunks, size = [], 0
+        chunks, size, started = [], 0, time.monotonic()
         for chunk in response.iter_bytes():
             size += len(chunk)
             if size > limit:
                 raise ValueError(f"feed larger than {limit} bytes: {url}")
+            if time.monotonic() - started > MAX_FETCH_SECONDS:
+                raise ValueError(f"feed took over {MAX_FETCH_SECONDS} seconds: {url}")
             chunks.append(chunk)
     return b"".join(chunks)
 

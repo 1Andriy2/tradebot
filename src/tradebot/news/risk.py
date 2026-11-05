@@ -23,6 +23,7 @@ MIN_CONFIDENCE = 0.5
 REDUCE_AT = 0.4
 STAND_ASIDE_AT = 0.75
 MIN_SOURCES_TO_STAND_ASIDE = 2  # one voice, even a loud one, can only trigger a reduction
+MIN_SOURCE_WEIGHT = 0.2  # a faint or fading item does not count as a second voice
 REDUCED = 0.5
 TOP = 3
 
@@ -31,6 +32,12 @@ def multiplier(pressure: float, sources: int) -> float:
     if pressure >= STAND_ASIDE_AT and sources >= MIN_SOURCES_TO_STAND_ASIDE:
         return 0.0
     return REDUCED if pressure >= REDUCE_AT else 1.0
+
+
+def story_times(events: pd.DataFrame) -> pd.Series:
+    """When each row's story first came out, so a repeat cannot make an old story young again."""
+    earliest = events[["published", "first_seen"]].min(axis=1)
+    return earliest.groupby(events["cluster"]).transform("min")
 
 
 def side_pressure(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float, int]:
@@ -43,11 +50,12 @@ def side_pressure(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float, int]:
         return 0.0, 0
     # News ages from publication, or a day of backlog would look fresh on the run that finds it.
     # A source's date can only make an item older: it is capped by when the bot first saw it.
-    hours = (now - events[["published", "first_seen"]].min(axis=1)).dt.total_seconds() / 3600
+    hours = (now - story_times(events)).dt.total_seconds() / 3600
     weight = (events["impact"].abs() * events["confidence"] * events["kind"].map(KIND_WEIGHT).fillna(0.5)
               * 0.5 ** (hours / HALF_LIFE_HOURS))
     per_story = weight.groupby(events["cluster"]).max()
-    return float(1 - np.prod(1 - per_story.clip(0, 1))), int(events["source"].nunique())
+    sources = events.loc[weight >= MIN_SOURCE_WEIGHT, "source"].nunique()
+    return float(1 - np.prod(1 - per_story.clip(0, 1))), int(sources)
 
 
 def _covers(assets: str, wanted: set[str]) -> bool:
@@ -73,7 +81,7 @@ def assess_scope(scope: str, events: pd.DataFrame, now: pd.Timestamp, stale: boo
 
 
 def assess(scored: pd.DataFrame, now: pd.Timestamp, stale: bool) -> list[dict[str, Any]]:
-    """One row per market, from events that were first seen in the last 24 hours."""
-    recent = scored[(scored["first_seen"] > now - WINDOW) & (scored["impact"].abs() >= MIN_IMPACT)
+    """One row per market, from stories that came out in the last 24 hours."""
+    recent = scored[(story_times(scored) > now - WINDOW) & (scored["impact"].abs() >= MIN_IMPACT)
                     & (scored["confidence"] >= MIN_CONFIDENCE)]
     return [assess_scope(scope, recent, now, stale) for scope in SCOPES]

@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tradebot import cli
 from tradebot.cli import _news_tables, build_parser
 from tradebot.config import NewsConfig
 from tradebot.data.sync import _paths
@@ -191,6 +192,14 @@ def test_gdelt_with_no_file_listed_fails_alone() -> None:
     assert items == [] and counts == {"gdelt": -1}
 
 
+def test_collection_stops_at_its_deadline_and_keeps_what_it_has() -> None:
+    def fine(fetch: sources.Fetch, now: pd.Timestamp) -> list[sources.Item]:
+        return [news_item("Bitcoin", "https://x.example/1")]
+
+    items, counts = sources.collect({"a": fine, "b": fine}, NOW, seconds=-1)
+    assert items == [] and counts == {"a": -1, "b": -1}
+
+
 def test_one_failed_source_does_not_stop_the_rest() -> None:
     def broken(fetch: sources.Fetch, now: pd.Timestamp) -> list[sources.Item]:
         raise httpx.ConnectError("down")
@@ -340,6 +349,25 @@ def test_a_repeated_story_counts_once_but_different_stories_add_up() -> None:
     two = scored_rows({"impact": -0.5, "source": "a"}, {"impact": -0.5, "source": "b", "cluster": "d"})
     assert risk.side_pressure(one, NOW) == (0.5, 2)
     assert risk.side_pressure(two, NOW)[0] == pytest.approx(0.75)
+
+
+def test_a_fresh_repeat_cannot_make_an_old_story_young() -> None:
+    day = pd.Timedelta("23h")
+    old = {"impact": -0.8, "published": NOW - day, "first_seen": NOW - day}
+    assert risk.side_pressure(scored_rows(old, {"impact": -0.8, "kind": "geo", "source": "b"}), NOW)[0] < 0.1
+
+
+def test_a_story_stays_out_once_it_is_over_a_day_old_even_if_repeated_today() -> None:
+    age = pd.Timedelta("30h")
+    rows = scored_rows({"published": NOW - age, "first_seen": NOW - age}, {"source": "b"})
+    assert all(r["events"] == 0 for r in risk.assess(rows, NOW, False))
+
+
+def test_a_faint_item_is_not_a_second_voice() -> None:
+    fading = pd.Timedelta("23h")
+    rows = scored_rows({"impact": -1.0}, {"impact": -0.3, "cluster": "d", "source": "b",
+                                          "published": NOW - fading, "first_seen": NOW - fading})
+    assert risk.side_pressure(rows, NOW) == (pytest.approx(1.0, abs=0.01), 1)
 
 
 def test_pressure_fades_with_a_six_hour_half_life() -> None:
@@ -538,6 +566,27 @@ def test_an_unread_gdelt_backlog_does_not_blind_the_filter() -> None:
     assert report.pending == 1 and all(r["level"] == risk.TRADE for r in report.risk)
 
 
+def test_an_official_source_is_not_held_back_by_a_waiting_gdelt_story() -> None:
+    frame, _, _ = run_once([geo_story("steel")], [])
+    later = NOW + pd.Timedelta("15min")
+    official = {**news_item("Tariffs steel", "https://f.example/1", source="fed_press", kind="official"),
+                "first_seen": later}
+    again, _, _ = run_once([official], [], frame, now=later)
+    assert again.iloc[1]["status"] == pipeline.PENDING and again["cluster"].nunique() == 2
+
+
+def test_a_repeat_takes_over_when_its_story_expires_unrated() -> None:
+    first = news_item("SEC sues Binance over securities", "https://a.example/1")
+    frame, _, _ = run_once([first], [])
+    later = NOW + pd.Timedelta("5h")
+    repeat = {**news_item("SEC sues Binance over securities today", "https://b.example/1", published=later),
+              "first_seen": later}
+    frame, _, _ = run_once([repeat], [], frame, now=later)
+    assert frame.iloc[1]["status"] == pipeline.DUPLICATE
+    frame, _, report = run_once([], [answering()], frame, now=NOW + pd.Timedelta("7h"))
+    assert list(frame["status"]) == [pipeline.EXPIRED, pipeline.SCORED] and report.scored == 1
+
+
 def test_official_news_goes_first_when_the_budget_is_short() -> None:
     items = [news_item("Tariffs on chips", "https://g.example/1", source="gdelt:x", kind="geo"),
              news_item("Board statement", "https://f.example/1", source="fed_press", kind="official")]
@@ -546,36 +595,40 @@ def test_official_news_goes_first_when_the_budget_is_short() -> None:
 
 
 def test_level_changes_become_events_and_steady_levels_do_not() -> None:
-    row = {"ts": NOW, "scope": "BTC", "level": "reduce"}
+    row = {"ts": NOW, "scope": "BTC", "level": "reduce", "long_mult": 0.5, "short_mult": 1.0}
     assert pipeline.level_changes(pd.DataFrame(), [row])[0]["message"] == "BTC: reduce"
-    assert pipeline.level_changes(pd.DataFrame(), [{**row, "level": "trade"}]) == []
-    assert pipeline.level_changes(pd.DataFrame([row]), [row]) == []
+    calm = {**row, "level": "trade", "long_mult": 1.0}
+    assert pipeline.level_changes(pd.DataFrame(), [calm]) == []
+    steady = {**row, "long_mult": 0.5, "short_mult": 1.0}
+    assert pipeline.level_changes(pd.DataFrame([steady]), [steady]) == []
+    other_side = {**steady, "long_mult": 1.0, "short_mult": 0.5}
+    assert len(pipeline.level_changes(pd.DataFrame([steady]), [other_side])) == 1
 
 
-def test_run_survives_a_round_trip_through_storage(tmp_path: Path) -> None:
+def test_run_survives_a_round_trip_through_storage() -> None:
     store = MemoryStore()
     item = news_item("SEC sues Binance", "https://x.example/1")
-    pipeline.run(tmp_path, store, static([item]), [answering(-0.9)], CFG, NOW)
+    pipeline.run(store, static([item]), [answering(-0.9)], CFG, NOW)
     later = NOW + pd.Timedelta("15min")
-    report = pipeline.run(tmp_path, store, static([{**item, "first_seen": later}]), [answering()], CFG, later)
+    report = pipeline.run(store, static([{**item, "first_seen": later}]), [answering()], CFG, later)
     assert report.new == 0
     assert len(pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.SCORED_FILE}"]))) == 1
     assert len(pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.RISK_FILE}"]))) == 6
     assert [e["message"] for e in store.tables["events"]] == ["BTC: reduce"]
 
 
-def test_a_failed_download_never_replaces_history_with_an_empty_table(tmp_path: Path) -> None:
+def test_a_failed_download_never_replaces_history_with_an_empty_table() -> None:
     class Flaky(MemoryStore):
         def download(self, bucket: str, path: str) -> bytes:
             raise RuntimeError("503 storage unavailable")
 
     store = Flaky()
     with pytest.raises(RuntimeError):
-        pipeline.run(tmp_path, store, static([]), [], CFG, NOW)
+        pipeline.run(store, static([]), [], CFG, NOW)
     assert store.files == {}
 
 
-def test_a_missing_file_starts_empty(tmp_path: Path) -> None:
+def test_a_missing_file_starts_empty() -> None:
     class Missing(Exception):
         status = "404"  # as storage3 reports it
 
@@ -583,17 +636,17 @@ def test_a_missing_file_starts_empty(tmp_path: Path) -> None:
         def download(self, bucket: str, path: str) -> bytes:
             raise Missing
 
-    assert pipeline.run(tmp_path, Fresh(), static([]), [], CFG, NOW).new == 0
+    assert pipeline.run(Fresh(), static([]), [], CFG, NOW).new == 0
 
 
-def test_an_outage_that_merely_says_not_found_is_still_an_outage(tmp_path: Path) -> None:
+def test_an_outage_that_merely_says_not_found_is_still_an_outage() -> None:
     class Flaky(MemoryStore):
         def download(self, bucket: str, path: str) -> bytes:
             raise RuntimeError("Unable to parse error message: tenant not found")
 
     store = Flaky()
     with pytest.raises(RuntimeError):
-        pipeline.run(tmp_path, store, static([]), [], CFG, NOW)
+        pipeline.run(store, static([]), [], CFG, NOW)
     assert store.files == {}
 
 
@@ -629,21 +682,21 @@ def test_unrated_items_stay_off_the_page() -> None:
     assert pipeline.page_rows(frame) == []
 
 
-def test_a_run_updates_only_the_stories_it_touched(tmp_path: Path) -> None:
+def test_a_run_updates_only_the_stories_it_touched() -> None:
     store = MemoryStore()
     first = news_item("SEC sues Binance", "https://x.example/1")
-    pipeline.run(tmp_path, store, static([first]), [answering()], CFG, NOW)
+    pipeline.run(store, static([first]), [answering()], CFG, NOW)
     store.tables["news_items"][0]["title"] = "kept"
     later = NOW + pd.Timedelta("7h")
     second = {**news_item("Bitcoin miners sell reserves", "https://x.example/2", published=later),
               "first_seen": later}
-    pipeline.run(tmp_path, store, static([first, second]), [answering()], CFG, later)
+    pipeline.run(store, static([first, second]), [answering()], CFG, later)
     assert [r["title"] for r in store.tables["news_items"]] == ["kept", second["title"]]
     assert {r["scope"] for r in store.tables["news_levels"]} == {"BTC", "ETH", "STOCKS"}
     assert len(store.tables["news_levels"]) == 3
 
 
-def test_a_failed_page_write_is_repaired_by_the_next_run(tmp_path: Path) -> None:
+def test_a_failed_page_write_is_repaired_by_the_next_run() -> None:
     class Down(MemoryStore):
         down = True
 
@@ -654,21 +707,21 @@ def test_a_failed_page_write_is_repaired_by_the_next_run(tmp_path: Path) -> None
 
     store = Down()
     item = news_item("SEC sues Binance", "https://x.example/1")
-    pipeline.run(tmp_path, store, static([item]), [answering()], CFG, NOW)
+    pipeline.run(store, static([item]), [answering()], CFG, NOW)
     assert not store.tables["news_items"] and len(store.tables["news_levels"]) == 3
     store.down = False
-    pipeline.run(tmp_path, store, static([item]), [answering()], CFG, NOW + pd.Timedelta("15min"))
+    pipeline.run(store, static([item]), [answering()], CFG, NOW + pd.Timedelta("15min"))
     assert len(store.tables["news_items"]) == 1
 
 
-def test_a_failed_page_update_does_not_stop_the_run(tmp_path: Path) -> None:
+def test_a_failed_page_update_does_not_stop_the_run() -> None:
     class NoTables(MemoryStore):
         def upsert(self, table: str, rows: list[dict[str, Any]], on_conflict: str) -> None:
             raise RuntimeError("relation does not exist")
 
     store = NoTables()
     item = news_item("SEC sues Binance", "https://x.example/1")
-    assert pipeline.run(tmp_path, store, static([item]), [answering()], CFG, NOW).scored == 1
+    assert pipeline.run(store, static([item]), [answering()], CFG, NOW).scored == 1
     assert f"data/{pipeline.SCORED_FILE}" in store.files
 
 
@@ -722,20 +775,20 @@ def test_a_failed_read_of_the_archive_does_not_overwrite_it() -> None:
     assert len(archive.rotate(store, "x", aged("5D"), "ts", LATER)) == 1 and store.files == {}
 
 
-def test_unrated_rows_are_not_archived(tmp_path: Path) -> None:
+def test_unrated_rows_are_not_archived() -> None:
     store = MemoryStore()
     start = LATER - pd.Timedelta("5D")
     items = [{**news_item("SEC sues Binance", "https://x.example/1", published=start), "first_seen": start},
              {**news_item("Local bakery opens", "https://x.example/2", published=start), "first_seen": start}]
-    pipeline.run(tmp_path, store, static(items), [answering()], CFG, start)
-    pipeline.run(tmp_path, store, static([]), [answering()], CFG, LATER)
+    pipeline.run(store, static(items), [answering()], CFG, start)
+    pipeline.run(store, static([]), [answering()], CFG, LATER)
     hot = pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.SCORED_FILE}"]))
     assert hot.empty
     kept = archive.history(store, pipeline.SCORED_STEM, pipeline.SCORED_FILE, LATER)
     assert list(kept["url"]) == ["https://x.example/1"]
 
 
-def test_research_sees_archives_and_the_hot_file_together(tmp_path: Path) -> None:
+def test_research_sees_archives_and_the_hot_file_together() -> None:
     store = MemoryStore()
     archive.write_file(store, "news_scored_2026-11.parquet", aged("5D"))
     archive.write_file(store, pipeline.SCORED_FILE, aged("1h"))
@@ -743,13 +796,13 @@ def test_research_sees_archives_and_the_hot_file_together(tmp_path: Path) -> Non
     assert len(scored) == 2 and levels.empty
 
 
-def test_a_hot_file_stays_small_over_many_runs(tmp_path: Path) -> None:
+def test_a_hot_file_stays_small_over_many_runs() -> None:
     store = MemoryStore()
     for day in range(12):
         now = LATER + pd.Timedelta(days=day)
         item = {**news_item(f"Bitcoin story number {day}", f"https://x.example/{day}", published=now),
                 "first_seen": now}
-        pipeline.run(tmp_path, store, static([item]), [answering()], CFG, now)
+        pipeline.run(store, static([item]), [answering()], CFG, now)
     hot = pd.read_parquet(io.BytesIO(store.files[f"data/{pipeline.SCORED_FILE}"]))
     assert len(hot) <= 5
     assert len(archive.history(store, pipeline.SCORED_STEM, pipeline.SCORED_FILE, now)) == 12
@@ -769,7 +822,7 @@ def falling_after(stamps: pd.DatetimeIndex, index: pd.DatetimeIndex) -> pd.Serie
 
 
 def rated(stamps: pd.DatetimeIndex, **over: Any) -> pd.DataFrame:
-    rows = {"first_seen": stamps, "impact": -0.8, "confidence": 0.9, "assets": "BTC",
+    rows = {"first_seen": stamps, "scored_at": stamps, "impact": -0.8, "confidence": 0.9, "assets": "BTC",
             "cluster": [str(i) for i in range(len(stamps))], "prompt_version": scoring.PROMPT_VERSION,
             "model": MODEL}
     return pd.DataFrame({**rows, **over})
@@ -806,6 +859,36 @@ def test_studies_work_when_candles_and_scores_use_different_time_units() -> None
     assert study(nightly(close, scored, EMPTY, "btc"), "llm_bad_news")["n"] > 30
 
 
+def test_a_rating_counts_from_when_it_existed() -> None:
+    late = rated(STAMPS, scored_at=STAMPS + pd.Timedelta("5h"))
+    close = falling_after(STAMPS, INDEX)
+    assert study(nightly(close, late, EMPTY, "btc"), "llm_bad_news")["mean_after"] > \
+        study(nightly(close, rated(STAMPS), EMPTY, "btc"), "llm_bad_news")["mean_after"]
+
+
+def test_a_long_filter_episode_is_one_event() -> None:
+    hours = pd.date_range("2026-03-01", periods=600, freq="1h", tz="UTC")
+    levels = pd.DataFrame({"ts": hours, "scope": "BTC", "long_mult": 0.5, "short_mult": 1.0, "stale": False})
+    rows = nightly(pd.Series(100.0, index=INDEX), EMPTY, levels, "btc")
+    assert study(rows, "filter_cut_longs")["n"] == 1
+
+
+def test_q_values_cover_every_study_of_the_night(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from tradebot.config import Settings
+    from tradebot.research import events
+
+    studies = [{"test": f"t{i}", "status": "tested", "p_value": 0.01, "horizon_hours": 4} for i in range(4)]
+    filler = [{"test": f"f{i}", "status": "tested", "p_value": 0.9, "horizon_hours": 4} for i in range(36)]
+    monkeypatch.setattr(cli, "load_cached", lambda *a: pd.DataFrame({"close": [1.0]}))
+    monkeypatch.setattr(events, "liquidation_studies", lambda *a: [dict(s) for s in studies])
+    monkeypatch.setattr(events, "news_studies", lambda *a: [dict(s) for s in filler])
+    monkeypatch.setattr(events, "scored_news_studies", lambda *a: [])
+    settings = Settings(data_dir=str(tmp_path))
+    settings.markets.symbols = ["BTC/USDT:USDT"]
+    rows = cli._study_events(settings, MemoryStore(), NOW)
+    assert rows[0]["details"]["q_value"] == pytest.approx(0.01 * 40 / 4)
+
+
 def test_studies_use_the_time_the_bot_knew() -> None:
     late = rated(STAMPS + pd.Timedelta("5h"), published=STAMPS)
     bad = study(nightly(falling_after(STAMPS, INDEX), late, EMPTY, "btc"), "llm_bad_news")
@@ -832,8 +915,9 @@ def test_a_story_told_many_times_is_one_event() -> None:
 
 
 def test_filter_study_counts_only_hours_that_cut_a_side_and_were_not_stale() -> None:
-    levels = pd.DataFrame({"ts": STAMPS, "scope": "BTC", "long_mult": 0.5, "short_mult": 1.0,
-                           "stale": False})
+    cuts = pd.DataFrame({"ts": STAMPS, "scope": "BTC", "long_mult": 0.5, "short_mult": 1.0, "stale": False})
+    calm = cuts.assign(ts=cuts["ts"] + pd.Timedelta("20h"), long_mult=1.0)
+    levels = pd.concat([cuts, calm])
     close = falling_after(STAMPS, INDEX)
     rows = nightly(close, EMPTY, levels, "btc")
     assert study(rows, "filter_cut_longs")["status"] == "tested"

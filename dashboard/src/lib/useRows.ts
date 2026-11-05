@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase/client";
 
 interface Options {
-  order?: { column: string; ascending?: boolean };
+  order?: { column: string; ascending?: boolean; tiebreak?: string };
   /** Max rows; fetched in pages of 1000 (the PostgREST default cap). */
   limit?: number;
   filters?: Record<string, string | number | boolean>;
@@ -38,6 +38,7 @@ export function useRows<T>(table: string, opts: Options = {}) {
         q = q.gte(o.sinceDays.column, since);
       }
       if (o.order) q = q.order(o.order.column, { ascending: o.order.ascending ?? false });
+      if (o.order?.tiebreak) q = q.order(o.order.tiebreak); // rows tied across two pages would repeat or vanish
       const { data, error } = await q.range(from, Math.min(from + PAGE, limit) - 1);
       if (id !== lastLoad.current) return; // a newer load is running, and its result wins
       if (error) {

@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable
@@ -34,6 +35,7 @@ OFFICIAL, NEWS, SOCIAL, GEO, MARKET = "official", "news", "social", "geo", "mark
 
 MAX_DOWNLOAD = 30_000_000  # a GDELT file is about 8 MB
 MAX_UNZIPPED = 200_000_000
+COLLECT_SECONDS = 240  # the job gets 10 minutes: leave room to score and save what was found
 MAX_TEXT = 500
 ATOM = "{http://www.w3.org/2005/Atom}"
 
@@ -214,12 +216,18 @@ def download(url: str) -> bytes:
     return fetch_feed(url, MAX_DOWNLOAD)
 
 
-def collect(sources: dict[str, Source], now: pd.Timestamp,
-            fetch: Fetch = download) -> tuple[list[Item], dict[str, int]]:
-    """Items from every source, and how many each gave (-1 for a source that failed)."""
+def collect(sources: dict[str, Source], now: pd.Timestamp, fetch: Fetch = download,
+            seconds: float = COLLECT_SECONDS) -> tuple[list[Item], dict[str, int]]:
+    """Items from every source, and how many each gave (-1 for a source that failed or was skipped
+    because time ran out)."""
     items: list[Item] = []
     counts: dict[str, int] = {}
+    deadline = time.monotonic() + seconds
     for name, source in sources.items():
+        if time.monotonic() > deadline:
+            log.warning("news source %s skipped: out of time", name)
+            counts[name] = -1
+            continue
         try:
             found = source(fetch, now)
         except Exception as exc:  # outside data can fail in any way, and must stop only this source
