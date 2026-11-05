@@ -75,6 +75,9 @@ cache sync. Level changes are events of type `news_risk`.
    original from the twin's first bar. The demo account never reads the levels.
 6. **Read** — the dashboard's `/news` page shows levels and rated stories from `news_levels` and
    `news_items`.
+7. **Follow** — the page's `watchlist` table adds Google News, Yahoo and, for stocks, SEC filings for each
+   followed asset, searched by full name. Adding a row starts a run at once; deleting it stops collection.
+   `/api/assets` resolves a ticker through CoinGecko, the SEC and Yahoo, and lists duplicates by market cap.
 
 ## Database
 

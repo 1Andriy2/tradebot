@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Empty, ErrorNote, PageTitle } from "@/components/ui";
+import { Watchlist } from "@/components/Watchlist";
 import {
   ago, ASSETS, assetList, byDay, CHANNELS, concerns, EVENT_TYPES, fmtClock, fmtImpact, fmtMult, LEVELS, outletName,
   safeUrl, SCOPES, SHORTS_ONLY_HINT, SIGNIFICANT, STANCES, storyTime, strength,
 } from "@/lib/news";
-import type { NewsItemRow, NewsLevelRow } from "@/lib/types";
+import type { NewsItemRow, NewsLevelRow, WatchRow } from "@/lib/types";
 import { useNow } from "@/lib/useNow";
 import { useRows } from "@/lib/useRows";
 
@@ -14,6 +15,7 @@ const DAYS = 7;
 const MAX_STORIES = DAYS * 500; // the news job scores at most 500 a day, so this never cuts the week
 const LEVEL_MAX_AGE_MS = 3_600_000; // the same limit the test agents apply
 const REFRESH_MS = 3_600_000; // a week of stories is the heavy read: an open tab repeats it hourly at most
+const FRESH_SUBSCRIPTION_MS = 900_000; // after subscribing, every news run counts: the first stories are due
 const SCOPE_ORDER = ["BTC", "ETH", "STOCKS"];
 
 const VIEWS: Record<string, { label: string; test: (i: NewsItemRow) => boolean }> = {
@@ -166,17 +168,20 @@ export default function NewsPage() {
     order: { column: "first_seen", tiebreak: "cluster" }, limit: MAX_STORIES, sinceDays: { column: "first_seen", days: DAYS },
   });
   const levels = useRows<NewsLevelRow>("news_levels", { realtime: true });
+  const watchlist = useRows<WatchRow>("watchlist", { order: { column: "added_at", ascending: true }, realtime: true });
 
   // Stories are the heavy table: refetch them at most hourly, and only for a tab someone is looking at.
   const { reload } = news;
   const updatedAt = levels.rows.map((r) => r.updated_at).sort().at(-1);
   const loadedAt = useRef(0);
+  const subscribedAt = useRef(0);
   useEffect(() => {
     const refresh = () => {
       if (!updatedAt) return;
       const time = Date.now();
       if (!loadedAt.current) loadedAt.current = time; // the first load already has this run
-      else if (document.visibilityState === "visible" && time - loadedAt.current >= REFRESH_MS) {
+      else if (document.visibilityState === "visible"
+        && (time - loadedAt.current >= REFRESH_MS || time - subscribedAt.current < FRESH_SUBSCRIPTION_MS)) {
         loadedAt.current = time;
         void reload();
       }
@@ -197,6 +202,9 @@ export default function NewsPage() {
       .sort((a, b) => new Date(storyTime(b)).getTime() - new Date(storyTime(a)).getTime());
   }, [news.rows, view, asset, channel, topic, query]);
 
+  const assetFilters = Object.entries(ASSET_FILTERS).concat(
+    watchlist.rows.filter((w) => !(w.ticker in ASSET_FILTERS)).map((w): [string, string] => [w.ticker, w.ticker]),
+  );
   const cards = SCOPE_ORDER.flatMap((scope) => levels.rows.filter((r) => r.scope === scope));
 
   return (
@@ -215,6 +223,15 @@ export default function NewsPage() {
         </>
       )}
 
+      <Watchlist
+        rows={watchlist.rows}
+        onSubscribed={(ticker) => {
+          subscribedAt.current = Date.now();
+          setAsset(ticker);
+        }}
+        onRemoved={(ticker) => setAsset((current) => (current === ticker ? "all" : current))}
+      />
+
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -229,7 +246,7 @@ export default function NewsPage() {
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm sm:w-56 dark:border-slate-700 dark:bg-slate-900"
             />
           </div>
-          <Chips label="Актив" value={asset} onChange={setAsset} options={Object.entries(ASSET_FILTERS)} />
+          <Chips label="Актив" value={asset} onChange={setAsset} options={assetFilters} />
           <div className="flex flex-wrap items-center gap-3">
             <Chips label="Тип впливу" value={channel} onChange={setChannel} options={Object.entries(CHANNEL_FILTERS)} />
             <select

@@ -167,6 +167,30 @@ export interface NewsItemRow {
   outlets: string[];
 }
 
+export interface WatchRow {
+  id: string;
+  kind: "crypto" | "stock";
+  ticker: string;
+  name: string;
+  source_id: string;
+  added_at: string;
+}
+
+/** One match for a typed ticker, with what is needed to tell duplicates apart. */
+export interface AssetCandidate {
+  id: string;
+  kind: "crypto" | "stock";
+  ticker: string;
+  name: string;
+  source_id: string;
+  price: number | null;
+  market_cap: number | null;
+  volume: number | null;
+  rank: number | null;
+  exchange: string | null;
+  currency: string;
+}
+
 export type NewsLevel = "trade" | "reduce" | "stand_aside" | "unknown";
 
 export interface NewsLevelRow {

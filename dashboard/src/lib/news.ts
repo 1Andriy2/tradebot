@@ -79,10 +79,12 @@ const OUTLETS: Record<string, string> = {
   fr_president: "Federal Register",
   fr_rules: "Federal Register",
   polymarket: "Polymarket",
+  yahoo: "Yahoo Finance",
 };
 
 export function outletName(source: string): string {
   if (source.startsWith("gdelt:")) return source.slice(6);
+  if (source.startsWith("google:")) return source.slice(7);
   if (source.startsWith("telegram:")) return `Telegram, ${source.slice(9)}`;
   return OUTLETS[source] ?? source;
 }
@@ -113,6 +115,15 @@ export function strength(impact: number): string {
 const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" });
 const dayName = new Intl.DateTimeFormat("uk-UA", { timeZone: TZ, day: "numeric", month: "long" });
 const clock = new Intl.DateTimeFormat("uk-UA", { timeZone: TZ, hour: "2-digit", minute: "2-digit" });
+
+const compact = new Intl.NumberFormat("uk-UA", { notation: "compact", maximumFractionDigits: 1 });
+const price = new Intl.NumberFormat("uk-UA", { maximumSignificantDigits: 6 });
+
+export function fmtMoney(v: number | null, currency = "USD", short = false): string {
+  if (v == null) return "—";
+  const sign = currency === "USD" ? "$" : `${currency} `;
+  return `${sign}${(short ? compact : price).format(v)}`;
+}
 
 export const fmtClock = (iso: string): string => clock.format(new Date(iso));
 

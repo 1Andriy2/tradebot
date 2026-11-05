@@ -29,8 +29,8 @@ log = logging.getLogger(__name__)
 SCORED_STEM, RISK_STEM = "news_scored", "news_risk"
 SCORED_FILE, RISK_FILE = f"{SCORED_STEM}.parquet", f"{RISK_STEM}.parquet"
 
-PENDING, SCORED, DUPLICATE, IGNORED, OLD, EXPIRED, SUSPICIOUS = (
-    "pending", "scored", "duplicate", "ignored", "old", "expired", "suspicious")
+PENDING, SCORED, DUPLICATE, IGNORED, OLD, EXPIRED, SUSPICIOUS, OFF_TOPIC = (
+    "pending", "scored", "duplicate", "ignored", "old", "expired", "suspicious", "off_topic")
 
 MAX_AGE = pd.Timedelta("24h")  # older than this on first sight: not news any more
 RETRY_FOR = pd.Timedelta("6h")  # an item the model never answered for stops being worth a call
@@ -41,12 +41,12 @@ REPUBLISH = pd.Timedelta("6h")  # a failed write to the page's tables is repaire
 # GDELT finds about 20 new stories a run, which alone would use the daily budget in hours and leave
 # official sources waiting. Repeats stay free, so outlets can still confirm a story.
 GEO_STORIES_PER_RUN = 3
-PRIORITY = {"official": 0, "social": 1, "market": 2, "news": 3, "geo": 4}
+PRIORITY = {"watch": -1, "official": 0, "social": 1, "market": 2, "news": 3, "geo": 4}
 
 TIMES = ["published", "first_seen", "scored_at"]
 NUMBERS = ["impact", "confidence"]
 TEXTS = ["source", "kind", "title", "title_uk", "url", "cluster", "status", "subject", "stance", "channel",
-         "event_type", "assets", "reason", "model", "prompt_version"]
+         "event_type", "assets", "reason", "model", "prompt_version", "watch"]
 COLUMNS = TIMES + NUMBERS + TEXTS
 SCORE_FIELDS = ["impact", "confidence", "subject", "stance", "channel", "event_type", "assets", "title_uk",
                 "reason"]
@@ -152,7 +152,12 @@ def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.Data
 def apply_scores(frame: pd.DataFrame, answers: dict[int, tuple[Assessment, str]],
                  done: pd.Timestamp) -> None:
     for index, (answer, model) in answers.items():
-        values = {**answer.model_dump(include=set(SCORE_FIELDS)), "assets": ",".join(answer.assets),
+        watch = frame.at[index, "watch"]
+        if watch and not answer.about_asset:
+            frame.at[index, "status"] = OFF_TOPIC
+            continue
+        assets = dict.fromkeys([*([str(watch)] if watch else []), *answer.assets])
+        values = {**answer.model_dump(include=set(SCORE_FIELDS)), "assets": ",".join(assets),
                   "status": SCORED, "scored_at": done, "model": model, "prompt_version": PROMPT_VERSION}
         for col, value in values.items():
             frame.at[index, col] = value
@@ -173,9 +178,12 @@ def page_rows(frame: pd.DataFrame, clusters: set[str] | None = None) -> list[dic
     if clusters is not None:
         rated = rated[rated["cluster"].isin(clusters)]
     outlets = rated.groupby("cluster")["source"].unique()
+    watches = rated[rated["watch"] != ""].groupby("cluster")["watch"].unique().to_dict()
     heads = rated[rated["status"] == SCORED].drop_duplicates("cluster")
     rows = cast(list[dict[str, Any]], heads[PAGE_FIELDS].to_dict("records"))
-    return [{**row, "outlets": [str(s) for s in outlets[row["cluster"]]]} for row in rows]
+    return [{**row, "outlets": [str(s) for s in outlets[row["cluster"]]],
+             "assets": ",".join(dict.fromkeys([*row["assets"].split(","), *watches.get(row["cluster"], [])]))
+             .strip(",")} for row in rows]
 
 
 def rated_rows(frame: pd.DataFrame) -> pd.DataFrame:
@@ -211,30 +219,34 @@ def level_changes(previous: pd.DataFrame, rows: list[dict[str, Any]]) -> list[di
 
 def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
            providers: list[Provider], cfg: NewsConfig, now: pd.Timestamp,
-           fetch: Fetch = download,
-           clock: Callable[[], pd.Timestamp] | None = None) -> tuple[pd.DataFrame, pd.DataFrame, NewsRun]:
+           fetch: Fetch = download, clock: Callable[[], pd.Timestamp] | None = None,
+           watched: dict[str, str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame, NewsRun]:
     """One pass over in-memory tables. Returns the new tables and a report.
 
     ``now`` is the start of the run. Ratings and levels are stamped by ``clock`` once they exist,
-    because tests of the filter must not credit it with a moment before it knew.
+    because tests of the filter must not credit it with a moment before it knew. ``watched`` maps
+    the tickers being followed to their names; anything unsubscribed stops at once.
     """
+    watched = watched or {}
     items, counts = collect(sources, now, fetch)
     fresh = ingest(scored, items, now)
     frame = fresh if scored.empty else pd.concat([scored, fresh]) if len(fresh) else scored
     frame = frame.reset_index(drop=True)
     frame.loc[(frame["status"] == PENDING) & (frame["first_seen"] < now - RETRY_FOR), "status"] = EXPIRED
+    dropped = (frame["status"] == PENDING) & (frame["watch"] != "") & ~frame["watch"].isin(watched)
+    frame.loc[dropped, "status"] = IGNORED
     choose_heads(frame)
 
     batch = to_score(frame, now, cfg)
-    payload = [{"id": int(i), "kind": k, "text": t}
-               for i, k, t in zip(batch.index, batch["kind"], batch["title"], strict=True)]
+    payload = [{"id": int(i), "kind": k, "text": t, **({"asset": f"{watched[w]} ({w})"} if w else {})}
+               for i, k, t, w in zip(batch.index, batch["kind"], batch["title"], batch["watch"], strict=True)]
     answers = score(providers, payload, now) if payload and providers else {}
     done = clock() if clock else now
     apply_scores(frame, answers, done)
     share_scores(frame)
 
     pending = frame[frame["status"] == PENDING]
-    waiting = pending[pending["kind"] != "geo"]  # the loud source going unread is not a blind spot
+    waiting = pending[~pending["kind"].isin(["geo", "watch"])]  # neither of these blinds the filter
     behind = int((waiting["first_seen"] < now - STALE_AFTER).sum()) >= STALE_BACKLOG
     touched = set(frame.loc[list(answers), "cluster"]) | set(fresh["cluster"])
     report = NewsRun(counts, new=len(fresh), scored=len(answers), pending=len(pending), touched=touched)
@@ -246,8 +258,8 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
 
 
 def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg: NewsConfig,
-        now: pd.Timestamp, fetch: Fetch = download,
-        clock: Callable[[], pd.Timestamp] | None = None) -> NewsRun:
+        now: pd.Timestamp, fetch: Fetch = download, clock: Callable[[], pd.Timestamp] | None = None,
+        watched: dict[str, str] | None = None) -> NewsRun:
     """Read both tables, do one pass, write them back, and log level changes.
 
     Only a file that does not exist yet starts empty. Any other failure to read stops the run:
@@ -258,7 +270,7 @@ def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg
     risk = read_file(store, RISK_FILE)
     risk = pd.DataFrame() if risk is None else risk
 
-    scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch, clock)
+    scored, risk, report = update(scored, risk, sources, providers, cfg, now, fetch, clock, watched)
     publish(store, scored, report, now)
     scored = rotate(store, SCORED_STEM, scored, "first_seen", now, rated_rows)
     risk = rotate(store, RISK_STEM, risk, "ts", now)

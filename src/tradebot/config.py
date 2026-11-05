@@ -49,8 +49,8 @@ class NewsConfig(BaseModel):
 
     gemini_model: str = "gemini-3.1-flash-lite"
     groq_model: str = "openai/gpt-oss-120b"
-    max_items_per_run: int = Field(40, gt=0)
-    max_items_per_day: int = Field(500, gt=0)
+    max_items_per_run: int = Field(120, gt=0)
+    max_items_per_day: int = Field(1500, gt=0)
     telegram_channels: list[str] = Field(default_factory=lambda: ["WatcherGuru", "bbcbreaking"])
 
 

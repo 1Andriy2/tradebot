@@ -28,8 +28,8 @@ risk:
 news:
   gemini_model: "gemini-3.1-flash-lite"
   groq_model: "openai/gpt-oss-120b"
-  max_items_per_run: 40
-  max_items_per_day: 500
+  max_items_per_run: 120   # safety ceilings, not quotas: what does not fit waits for the next run
+  max_items_per_day: 1500
   telegram_channels: ["WatcherGuru", "bbcbreaking"]
 
 data_dir: "data"

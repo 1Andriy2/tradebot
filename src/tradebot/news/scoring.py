@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -23,9 +24,10 @@ from tradebot.config import NewsConfig
 
 log = logging.getLogger(__name__)
 
-PROMPT_VERSION = "2"  # bump on any prompt change: scores from different prompts are not comparable
+PROMPT_VERSION = "3"  # bump on any prompt change: scores from different prompts are not comparable
 BATCH = 20
 TIMEOUT = 45
+SCORE_SECONDS = 240  # what is not scored by then waits for the next run, before the job's limit
 ASSET = re.compile(r"^[A-Z0-9.\-]{1,10}$")
 MAX_ASSETS = 8
 
@@ -55,6 +57,9 @@ Return one JSON object {"results": [...]} with one entry per item, using these f
 - title_uk: the item's headline translated into Ukrainian, at most 200 characters
 - reason: one short sentence in Ukrainian on why it has this impact
 
+- about_asset: false if the item has an "asset" field and is not really about that asset, for example
+  the same word used in another sense. Otherwise true.
+
 Rate only what the item says. Do not assume what happened afterwards."""
 
 
@@ -68,6 +73,7 @@ class Assessment(BaseModel):
     event_type: Literal["regulation", "hack", "etf", "monetary", "appointment", "sanctions", "tariff",
                         "election", "geopolitics", "company", "macro", "other"] = "other"
     assets: list[str] = Field(default_factory=list)
+    about_asset: bool = True
     title_uk: str = ""
     reason: str = ""
 
@@ -172,11 +178,15 @@ def _ask(providers: list[Provider], system: str,
     return out
 
 
-def score(providers: list[Provider], items: list[dict[str, Any]],
-          now: pd.Timestamp) -> dict[int, tuple[Assessment, str]]:
+def score(providers: list[Provider], items: list[dict[str, Any]], now: pd.Timestamp,
+          seconds: float = SCORE_SECONDS) -> dict[int, tuple[Assessment, str]]:
     """Assessments by item id, each with the model that gave it. Items left out stay unscored."""
     system = f"{SYSTEM_PROMPT}\n\nToday is {now:%Y-%m-%d}."
     out: dict[int, tuple[Assessment, str]] = {}
+    deadline = time.monotonic() + seconds
     for start in range(0, len(items), BATCH):
+        if time.monotonic() > deadline:
+            log.warning("scoring stopped for time, %d items wait", len(items) - start)
+            break
         out |= _ask(providers, system, items[start:start + BATCH])
     return out

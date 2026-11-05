@@ -23,6 +23,10 @@ from tradebot.strategies.baselines import baseline_strategies
 log = logging.getLogger("tradebot")
 
 SCENARIO_HORIZONS = {"24h": 24, "3d": 72, "7d": 168}  # in 1h candles
+CHECK_ASSETS: list[dict[str, Any]] = [  # one of each kind, to see that asset sources respond
+    {"id": "crypto:solana", "kind": "crypto", "ticker": "SOL", "name": "Solana", "source_id": "solana"},
+    {"id": "stock:NVDA", "kind": "stock", "ticker": "NVDA", "name": "NVIDIA CORP", "source_id": "1045810"},
+]
 
 
 def _store(args: argparse.Namespace) -> Store:
@@ -257,12 +261,12 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     from tradebot.news.filters import relevant
     from tradebot.news.pipeline import run
     from tradebot.news.scoring import providers_from_env
-    from tradebot.news.sources import all_sources, collect
+    from tradebot.news.sources import all_sources, collect, search_name
 
     now = pd.Timestamp.now(tz="UTC")
-    sources = all_sources(settings.news.telegram_channels)
+    channels = settings.news.telegram_channels
     if args.check:  # no model, no writes: shows what this network can reach
-        items, counts = collect(sources, now)
+        items, counts = collect(all_sources(channels, CHECK_ASSETS), now)
         for name, count in counts.items():
             print(f"{name:28s} {'FAILED' if count < 0 else count}")
         print(f"{sum(n >= 0 for n in counts.values())}/{len(counts)} sources, {len(items)} items, "
@@ -271,8 +275,11 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     providers = providers_from_env(settings.news)
     if not providers:
         log.warning("no GEMINI_API_KEY or GROQ_API_KEY: collecting without scoring")
-    report = run(_store(args), sources, providers, settings.news, now,
-                 clock=lambda: pd.Timestamp.now(tz="UTC"))
+    store = _store(args)
+    watchlist = store.select("watchlist")
+    report = run(store, all_sources(channels, watchlist), providers, settings.news, now,
+                 clock=lambda: pd.Timestamp.now(tz="UTC"),
+                 watched={str(a["ticker"]): search_name(a) for a in watchlist})
     failed = [name for name, count in report.counts.items() if count < 0]
     print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
           f"pending={report.pending} failed={failed}")

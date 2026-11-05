@@ -230,6 +230,148 @@ def test_every_configured_source_is_listed() -> None:
     assert not any("reddit" in n for n in names)
 
 
+# Followed assets
+
+SOL = {"id": "crypto:solana", "kind": "crypto", "ticker": "SOL", "name": "Solana", "source_id": "solana"}
+NVDA = {"id": "stock:NVDA", "kind": "stock", "ticker": "NVDA", "name": "NVIDIA CORP", "source_id": "1045810"}
+
+
+def google_feed(*items: tuple[str, str, str]) -> bytes:
+    body = "".join(f"<item><title>{t} - {o}</title><link>{u}</link><source>{o}</source>"
+                   "<pubDate>Thu, 05 Nov 2026 10:00:00 GMT</pubDate></item>" for t, o, u in items)
+    return f"<rss><channel>{body}</channel></rss>".encode()
+
+
+def test_company_suffixes_are_dropped_from_the_search_name() -> None:
+    assert sources.search_name(NVDA) == "NVIDIA"
+    assert sources.search_name({"name": "Apple Inc."}) == "Apple"
+    assert sources.search_name({"name": "AT&T INC."}) == "AT&T"
+    assert sources.search_name(SOL) == "Solana"
+
+
+def test_a_headline_must_name_the_asset() -> None:
+    assert filters.mentions("Solana rallies on ETF hopes", "Solana", "SOL")
+    assert filters.mentions("Why $SOL is moving", "Solana", "SOL")
+    assert filters.mentions("Render (RENDER) drops 3.9%", "Render", "RENDER")
+    assert not filters.mentions("Bridge beam installation near Route 1", "NEAR Protocol", "NEAR")
+    assert not filters.mentions("Link to the full report", "Chainlink", "LINK")
+    assert not filters.mentions("Sol Campbell joins club", "Solana", "SOL")
+
+
+def test_google_items_name_their_outlet_and_lose_it_from_the_title() -> None:
+    feed = google_feed(("Solana rallies", "CoinDesk", "https://news.google.com/a"),
+                       ("Nothing about it", "Blog", "https://news.google.com/b"))
+    (row,) = sources._google(SOL)(lambda url: feed, NOW)
+    assert row["title"] == "Solana rallies" and row["source"] == "google:CoinDesk"
+    assert row["kind"] == sources.WATCH and row["watch"] == "SOL"
+
+
+def test_searches_use_the_name_and_context_only_for_coins() -> None:
+    seen: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        seen.append(url)
+        return google_feed()
+
+    sources._google(SOL)(fetch, NOW)
+    sources._google(NVDA)(fetch, NOW)
+    assert "%22Solana%22+crypto" in seen[0] and "%22NVIDIA%22+when" in seen[1]
+
+
+def test_each_followed_asset_gets_its_sources_and_stocks_get_filings() -> None:
+    names = set(sources.asset_sources([SOL, NVDA]))
+    assert names == {"google_crypto:solana", "yahoo_crypto:solana", "google_stock:NVDA", "yahoo_stock:NVDA",
+                     "filings_stock:NVDA"}
+
+
+def test_nothing_is_fetched_for_assets_nobody_follows() -> None:
+    assert sources.asset_sources([]) == {}
+    assert not any(n.startswith(("google_", "yahoo_")) for n in sources.all_sources([]))
+
+
+def watched_item(title: str = "Solana rallies", url: str = "https://x.example/w") -> dict[str, Any]:
+    return {**news_item(title, url, source="google:CoinDesk", kind="watch"), "watch": "SOL"}
+
+
+def run_watched(items: list[dict[str, Any]], provider: scoring.Provider, known: pd.DataFrame | None = None,
+                watched: dict[str, str] | None = None) -> tuple[pd.DataFrame, pipeline.NewsRun]:
+    table = pipeline.typed(pd.DataFrame()) if known is None else known
+    names = {"SOL": "Solana"} if watched is None else watched
+    frame, _, report = pipeline.update(table, pd.DataFrame(), static(items), [provider], CFG, NOW,
+                                       watched=names)
+    return frame, report
+
+
+def test_a_followed_story_is_tagged_with_its_asset_whatever_the_model_lists() -> None:
+    frame, _ = run_watched([watched_item()], answering(assets=("CRYPTO",)))
+    assert frame.iloc[0]["assets"] == "SOL,CRYPTO"
+    assert pipeline.page_rows(frame)[0]["assets"] == "SOL,CRYPTO"
+
+
+def test_the_model_is_told_which_asset_to_check() -> None:
+    seen: list[str] = []
+
+    def complete(system: str, user: str) -> str:
+        seen.append(user)
+        return '{"results": []}'
+
+    run_watched([watched_item()], scoring.Provider("m", complete))
+    assert json.loads(seen[0])[0]["asset"] == "Solana (SOL)"
+
+
+def test_a_story_the_model_says_is_off_topic_stays_off_the_page() -> None:
+    def off(system: str, user: str) -> str:
+        return json.dumps({"results": [{**answer(id=json.loads(user)[0]["id"]), "about_asset": False}]})
+
+    frame, _ = run_watched([watched_item()], scoring.Provider("m", off))
+    assert frame.iloc[0]["status"] == pipeline.OFF_TOPIC and pipeline.page_rows(frame) == []
+
+
+def test_unsubscribing_stops_at_once() -> None:
+    frame, _ = run_watched([watched_item()], scoring.Provider("m", down))
+    assert frame.iloc[0]["status"] == pipeline.PENDING
+
+    def fail(system: str, user: str) -> str:
+        raise AssertionError("model called for an asset nobody follows")
+
+    frame, report = run_watched([], scoring.Provider("m", fail), frame, watched={})
+    assert frame.iloc[0]["status"] == pipeline.IGNORED and report.pending == 0
+
+
+def test_followed_assets_are_scored_first_and_no_quota_applies() -> None:
+    words = ["miners", "banks", "wallets", "lawsuits", "outflows", "futures", "options", "custody"]
+    topics = [f"Solana {w}" for w in words]
+    items = [watched_item(t, f"https://x.example/{i}") for i, t in enumerate(topics)]
+    items.append(news_item("Fed statement", "https://f.example/1", source="fed_press", kind="official"))
+    table = pipeline.typed(pd.DataFrame())
+    cfg = NewsConfig(max_items_per_run=len(topics))
+    frame, _, _ = pipeline.update(table, pd.DataFrame(), static(items), [answering()], cfg, NOW,
+                                  watched={"SOL": "Solana"})
+    assert (frame[frame["watch"] == "SOL"]["status"] == pipeline.SCORED).all()
+    assert frame.set_index("source").loc["fed_press", "status"] == pipeline.PENDING
+
+
+def test_a_backlog_of_followed_news_does_not_mark_btc_stale() -> None:
+    topics = ["miners", "banks", "wallets", "lawsuits", "outflows", "futures"]
+    items = [watched_item(f"Solana {t}", f"https://x.example/{t}") for t in topics]
+    frame, _ = run_watched(items, scoring.Provider("m", down))
+    _, _, report = pipeline.update(frame, pd.DataFrame(), static([]), [scoring.Provider("m", down)], CFG,
+                                   NOW + pd.Timedelta("2h"), watched={"SOL": "Solana"})
+    assert not any(r["stale"] for r in report.risk)
+
+
+def test_scoring_stops_at_its_deadline_and_the_rest_wait() -> None:
+    items = [{"id": i, "kind": "n", "text": "t"} for i in range(scoring.BATCH * 2)]
+    assert scoring.score([answering()], items, NOW, seconds=-1) == {}
+
+
+def test_a_run_reads_the_watchlist_it_is_given() -> None:
+    store = MemoryStore()
+    item = watched_item()
+    report = pipeline.run(store, static([item]), [answering()], CFG, NOW, watched={"SOL": "Solana"})
+    assert report.scored == 1
+
+
 # Filters
 
 def test_official_sources_always_pass_but_others_need_a_watched_term() -> None:

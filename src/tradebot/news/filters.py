@@ -46,9 +46,18 @@ WORD = re.compile(r"[a-z0-9$%]{3,}")
 def relevant(item: dict[str, Any]) -> bool:
     if EMPTY_POST.match(item["title"]):
         return False
+    if item.get("watch"):  # already checked to be about an asset the user follows
+        return True
     if item["source"] in ALWAYS_SCORED:
         return True
     return bool((STRICT_WATCH if item["source"] in STRICT_SOURCES else WATCH).search(item["title"]))
+
+
+def mentions(title: str, name: str, ticker: str) -> bool:
+    """Whether a headline names the asset. A bare ticker proves nothing: LINK, NEAR and T are words,
+    so a ticker counts only when written as one, like $SOL or (SOL)."""
+    written = rf"\${re.escape(ticker)}\b|\({re.escape(ticker)}\)"
+    return bool(re.search(rf"\b{re.escape(name)}\b|{written}", title, re.I))
 
 
 def suspicious(title: str) -> bool:

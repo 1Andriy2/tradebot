@@ -15,7 +15,7 @@ import pandas as pd
 TRADE, REDUCE, STAND_ASIDE = "trade", "reduce", "stand_aside"
 
 SCOPES = {"BTC": {"BTC", "CRYPTO"}, "ETH": {"ETH", "CRYPTO"}, "STOCKS": {"STOCKS"}}
-KIND_WEIGHT = {"official": 1.0, "news": 0.8, "market": 0.8, "geo": 0.6, "social": 0.5}
+KIND_WEIGHT = {"official": 1.0, "news": 0.8, "watch": 0.8, "market": 0.8, "geo": 0.6, "social": 0.5}
 WINDOW = pd.Timedelta("24h")
 HALF_LIFE_HOURS = 6.0
 MIN_IMPACT = 0.3

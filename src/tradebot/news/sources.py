@@ -23,7 +23,7 @@ from urllib.parse import urlencode
 import pandas as pd
 
 from tradebot.data.news import FEEDS, fetch_feed
-from tradebot.news.filters import STRICT_WATCH
+from tradebot.news.filters import STRICT_WATCH, mentions
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ Item = dict[str, Any]
 Fetch = Callable[[str], bytes]
 Source = Callable[[Fetch, pd.Timestamp], list[Item]]
 
-OFFICIAL, NEWS, SOCIAL, GEO, MARKET = "official", "news", "social", "geo", "market"
+OFFICIAL, NEWS, SOCIAL, GEO, MARKET, WATCH = "official", "news", "social", "geo", "market", "watch"
 
 MAX_DOWNLOAD = 30_000_000  # a GDELT file is about 8 MB
 MAX_UNZIPPED = 200_000_000
@@ -57,6 +57,12 @@ POLYMARKET_TAGS = ("politics", "economy", "geopolitics")  # the top of the unfil
 MARKET_MOVE = 0.10  # one-hour change in probability
 MARKET_VOLUME = 50_000.0
 PRICE_MARKET = re.compile(r"\b(price|above|below|up or down|hit \$|reach \$)", re.I)
+
+GOOGLE_NEWS = "https://news.google.com/rss/search"
+YAHOO_NEWS = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+SEC_COMPANY = "https://www.sec.gov/cgi-bin/browse-edgar"
+COMPANY_SUFFIX = re.compile(r"[\s,]+(inc|corp|corporation|co|company|ltd|plc|holdings|group|class [a-z])\.?$",
+                            re.I)
 
 TAG = re.compile(r"<[^>]+>")
 INVISIBLE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​-‏‪-‮⁠-⁩﻿]")
@@ -174,6 +180,63 @@ def parse_telegram(content: bytes, channel: str, seen_at: pd.Timestamp) -> list[
     return [r for r in rows if r]
 
 
+def search_name(asset: Item) -> str:
+    """The name news uses: 'NVIDIA CORP' is written 'NVIDIA'. Measured on one day of Google News, a
+    ticker alone found 0 to 44% relevant headlines for SOL, NEAR, LINK and T; the name found 41 to 98%."""
+    name = str(asset["name"]).strip()
+    while COMPANY_SUFFIX.search(name):
+        name = COMPANY_SUFFIX.sub("", name)
+    return name
+
+
+def _for_asset(rows: list[Item], asset: Item, check_name: bool = True) -> list[Item]:
+    """Tag items with the asset, keeping only headlines that really name it."""
+    name, ticker = search_name(asset), str(asset["ticker"])
+    kept = [r for r in rows if not check_name or mentions(r["title"], name, ticker)]
+    return [{**r, "kind": WATCH, "watch": ticker} for r in kept]
+
+
+def parse_google(content: bytes, seen_at: pd.Timestamp) -> list[Item]:
+    """Each item names its outlet, which becomes the source, so outlets can confirm one another."""
+    rows: list[Item | None] = []
+    for entry in ET.fromstring(content).iter("item"):
+        outlet = clean(entry.findtext("source"))
+        title = clean(entry.findtext("title")).removesuffix(f" - {outlet}")
+        rows.append(make_item(parse_time(entry.findtext("pubDate")), seen_at, f"google:{outlet}", WATCH,
+                              title, entry.findtext("link")))
+    return [r for r in rows if r]
+
+
+def _google(asset: Item) -> Source:
+    words = f'"{search_name(asset)}"' + (" crypto" if asset["kind"] == "crypto" else "")
+    query = urlencode({"q": f"{words} when:1d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    return lambda fetch, now: _for_asset(parse_google(fetch(f"{GOOGLE_NEWS}?{query}"), now), asset)
+
+
+def _yahoo(asset: Item) -> Source:
+    symbol = f"{asset['ticker']}-USD" if asset["kind"] == "crypto" else asset["ticker"]
+    query = urlencode({"s": symbol, "region": "US", "lang": "en-US"})
+    url = f"{YAHOO_NEWS}?{query}"
+    return lambda fetch, now: _for_asset(parse_feed(fetch(url), "yahoo", WATCH, now), asset)
+
+
+def _filings(asset: Item) -> Source:
+    query = urlencode({"action": "getcompany", "CIK": asset["source_id"], "type": "8-K", "count": 10,
+                       "output": "atom"})
+    return lambda fetch, now: _for_asset(parse_feed(fetch(f"{SEC_COMPANY}?{query}"), "sec_8k", WATCH, now),
+                                         asset, check_name=False)
+
+
+def asset_sources(watchlist: list[Item]) -> dict[str, Source]:
+    """Sources for the assets being followed. Nothing is fetched for anything else."""
+    sources: dict[str, Source] = {}
+    for asset in watchlist:
+        sources |= {f"google_{asset['id']}": _google(asset), f"yahoo_{asset['id']}": _yahoo(asset)}
+        if asset["kind"] == "stock" and asset.get("source_id"):
+            sources[f"filings_{asset['id']}"] = _filings(asset)
+    return sources
+
+
 def _feed(name: str, kind: str, url: str) -> Source:
     return lambda fetch, now: parse_feed(fetch(url), name, kind, now)
 
@@ -203,8 +266,9 @@ def _telegram(channel: str) -> Source:
     return lambda fetch, now: parse_telegram(fetch(f"https://t.me/s/{channel}"), channel, now)
 
 
-def all_sources(channels: list[str]) -> dict[str, Source]:
-    sources = {name: _feed(name, NEWS, url) for name, url in FEEDS.items()}
+def all_sources(channels: list[str], watchlist: list[Item] | None = None) -> dict[str, Source]:
+    sources = asset_sources(watchlist or [])
+    sources |= {name: _feed(name, NEWS, url) for name, url in FEEDS.items()}
     sources |= {name: _feed(name, OFFICIAL, url) for name, url in OFFICIAL_FEEDS.items()}
     sources |= {"truth_trump": _feed("truth_trump", SOCIAL, TRUTH_FEED), "gdelt": _gdelt,
                 "fr_president": _federal_register("fr_president", "PRESDOCU"),
