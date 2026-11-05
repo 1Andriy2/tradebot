@@ -40,4 +40,5 @@ def apply_levels(signal: pd.Series, levels: pd.DataFrame, scope: str, bar: pd.Ti
                            direction="backward", tolerance=MAX_AGE)
     long_mult = merged["long_mult"].fillna(1.0).clip(0, 1).to_numpy()
     short_mult = merged["short_mult"].fillna(1.0).clip(0, 1).to_numpy()
-    return signal.where(signal < 0, signal * long_mult).where(signal >= 0, signal * short_mult)
+    gated = signal.where(signal < 0, signal * long_mult).where(signal >= 0, signal * short_mult)
+    return gated + 0.0  # turns -0.0 into 0.0

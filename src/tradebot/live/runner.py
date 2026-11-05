@@ -3,7 +3,7 @@
 Every step, for each symbol, on the last fully closed candle:
 - every agent advances its shadow paper book (same rules as the backtester);
 - the champion agent also trades the Bybit demo account (if a venue is configured);
-- twins of the champion and of a reference agent run shadow books behind the news filter.
+- twins of the champion and of reference agents run shadow books behind the news filter.
 Each step is idempotent per bar, so a doubled cron run does not trade twice.
 """
 
@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from tradebot import indicators as ind
-from tradebot.agents import DEFAULT_CHAMPION, NEWS_REFERENCE, Agent, all_agents, news_twin
+from tradebot.agents import DEFAULT_CHAMPION, NEWS_REFERENCES, Agent, all_agents, news_twin
 from tradebot.config import Settings
 from tradebot.data.history import fetch_ohlcv_range
 from tradebot.exchange.venue import Venue
@@ -114,7 +114,7 @@ class Trader:
         follows its original."""
         self.roster = list(self.agents)
         for base in self.agents:
-            if base.id in (champion, NEWS_REFERENCE):
+            if base.id == champion or base.id in NEWS_REFERENCES:
                 twin = news_twin(base)
                 self.roster.append(twin)
                 self.policies[twin.id] = self.policies[base.id]

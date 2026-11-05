@@ -52,6 +52,11 @@ def test_longs_and_shorts_use_their_own_multiplier() -> None:
     assert apply_levels(signal(-0.8), table, "BTC", BAR).iloc[0] == 0.0
 
 
+def test_a_cut_short_is_a_plain_zero() -> None:
+    gated = apply_levels(signal(-1.0), levels(START, short_mult=0.0), "BTC", BAR)
+    assert str(gated.iloc[0]) == "0.0"
+
+
 def test_the_latest_level_wins() -> None:
     table = pd.concat([levels(START, 0.0), levels(START + BAR, 0.5)])
     assert apply_levels(signal(), table, "BTC", BAR).iloc[1] == 0.5
@@ -155,11 +160,13 @@ def test_both_the_champion_and_the_reference_agent_get_a_twin() -> None:
     store.upsert("champion", [{"id": 1, "agent_id": "rl"}], on_conflict="id")
     settings = Settings()
     settings.markets.symbols = ["BTC/USDT:USDT"]
-    agents = [Agent("ma_cross", "baseline", Always()), Agent("rl", "rl", Always(0.0))]
+    agents = [Agent("ma_cross", "baseline", Always()), Agent("buy_hold", "baseline", Always()),
+              Agent("rl", "rl", Always(0.0))]
     bot = Trader(settings, store, FakePublic(), None, agents)
     bot.public.add_bar(100.0)
     assert bot.step().errors == []
-    assert {a.id for a in bot.roster} == {"ma_cross", "rl", "news_ma_cross", "news_rl"}
+    assert {a.id for a in bot.roster} == {"ma_cross", "buy_hold", "rl", "news_ma_cross", "news_buy_hold",
+                                          "news_rl"}
 
 
 def test_a_champion_that_is_not_loaded_gets_no_twin() -> None:
