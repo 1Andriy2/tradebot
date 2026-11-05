@@ -31,6 +31,7 @@ def _store(args: argparse.Namespace) -> Store:
 
 def _download(settings: Settings) -> None:
     from tradebot.data.funding import update_funding
+    from tradebot.data.news import update_news
 
     client = make_public_client(settings.venue.exchange_id)
     for symbol in settings.markets.symbols:
@@ -42,6 +43,10 @@ def _download(settings: Settings) -> None:
             log.exception("funding update failed for %s", symbol)
         if settings.venue.exchange_id == "okx":
             _collect_market_data(client, settings.data_path, symbol)
+    try:
+        update_news(settings.data_path, pd.Timestamp.now(tz="UTC"))
+    except Exception:  # news is optional, like the market data above
+        log.exception("news update failed")
 
 
 def _collect_market_data(client: Any, data_dir: Path, symbol: str) -> None:
@@ -155,8 +160,11 @@ def cmd_maintenance(settings: Settings, args: argparse.Namespace) -> int:
 def _study_events(settings: Settings, now: pd.Timestamp) -> list[dict[str, Any]]:
     """Tests of the liquidation idea on whatever has been collected so far."""
     from tradebot.data.market_stats import hourly_liquidations, liquidations_path, stats_path
-    from tradebot.research.events import liquidation_studies
+    from tradebot.data.news import news_path
+    from tradebot.research.events import liquidation_studies, news_studies
 
+    path = news_path(settings.data_path)
+    news = pd.read_parquet(path) if path.exists() else pd.DataFrame()
     rows = []
     for symbol in settings.markets.symbols:
         liq_path = liquidations_path(settings.data_path, symbol)
@@ -164,7 +172,9 @@ def _study_events(settings: Settings, now: pd.Timestamp) -> list[dict[str, Any]]
         liquidations = pd.read_parquet(liq_path) if liq_path.exists() else pd.DataFrame()
         stats = pd.read_parquet(stat_path) if stat_path.exists() else pd.DataFrame()
         close = load_cached(settings.data_path, symbol, "1h")["close"]
-        for study in liquidation_studies(close, hourly_liquidations(liquidations), stats):
+        coin = symbol.split("/")[0].lower()
+        studies = liquidation_studies(close, hourly_liquidations(liquidations), stats)
+        for study in studies + news_studies(close, news, coin):
             rows.append({"ts": now, "type": "event_study", "message": f"{symbol} {study['test']}",
                          "details": {"symbol": symbol, **study}})
     return rows

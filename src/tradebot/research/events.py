@@ -69,6 +69,24 @@ def liquidation_studies(close: pd.Series, hourly: pd.DataFrame, stats: pd.DataFr
     return out
 
 
+def news_studies(close: pd.Series, news: pd.DataFrame, coin: str,
+                 horizons: tuple[int, ...] = (4, 24)) -> list[dict[str, Any]]:
+    """Does price move after hours with good or bad headlines about ``coin``?"""
+    out = []
+    about = news[news[coin]] if len(news) else news
+    hours = pd.DatetimeIndex(about["published"]).ceil("1h") if len(about) else None
+    for name, mask in (("good_news", about["tone"] > 0), ("bad_news", about["tone"] < 0)) if len(about) \
+            else (("good_news", None), ("bad_news", None)):
+        for horizon in horizons:
+            if hours is None or mask is None:
+                out.append({"test": name, "status": "not_enough_data", "n": 0, "horizon_hours": horizon})
+                continue
+            events = pd.Series(True, index=hours[mask.to_numpy()].unique())
+            out.append({"test": name, **event_study(close, events, horizon)})
+    add_q_values(out)
+    return out
+
+
 def add_q_values(rows: list[dict[str, Any]]) -> None:
     """Benjamini-Hochberg across the tested rows of one run."""
     from tradebot.research.patterns import bh_qvalues
