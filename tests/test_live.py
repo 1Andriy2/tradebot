@@ -171,6 +171,35 @@ def test_a_new_champion_takes_over_the_demo_positions() -> None:
     assert venue.units["BTC/USDT:USDT"] == held["flat"]["units"]  # the account itself is not touched
 
 
+def test_a_returning_champion_records_no_trade_for_a_position_it_gave_up() -> None:
+    public, venue = FakePublic(), FakeVenue()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    store.upsert("champion", [{"id": 1, "agent_id": "flat"}], on_conflict="id")
+    public.add_bar(100.0)
+    trader.step()
+    venue.units["BTC/USDT:USDT"] = 0.0  # the attached take-profit closes it while "flat" is champion
+    store.upsert("champion", [{"id": 1, "agent_id": "ma_cross"}], on_conflict="id")
+    trader.agents[0] = Agent("ma_cross", "baseline", Const(0.0))
+    public.add_bar(100.0)
+    trader.step()
+    assert not [t for t in store.select("trades") if t["venue"] == "demo" and t["agent_id"] == "ma_cross"]
+
+
+def test_stepping_down_does_not_clear_a_kill_switch() -> None:
+    public, venue = FakePublic(), FakeVenue()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    venue._equity = 7_000.0
+    public.add_bar(100.0)
+    trader.step()
+    store.upsert("champion", [{"id": 1, "agent_id": "flat"}], on_conflict="id")
+    public.add_bar(100.0)
+    trader.step()
+    state = store.select("agent_state", {"agent_id": "ma_cross", "venue": "demo"})[0]["state"]
+    assert state["policy"]["risk"]["killed"] is True
+
+
 def test_flip_closes_then_opens() -> None:
     public, venue = FakePublic(), FakeVenue()
     trader, _ = make_trader(venue, public)
