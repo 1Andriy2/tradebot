@@ -1,0 +1,38 @@
+// Plain names for strategies. Ids stay in the database; people read these.
+
+const AGENTS: Record<string, { name: string; about: string }> = {
+  ma_cross: { name: "Перетин середніх", about: "Long, коли швидка ковзна середня вище за повільну, short, коли нижче." },
+  bb_breakout: { name: "Пробій Боллінджера", about: "Входить, коли ціна виходить за межі смуг волатильності." },
+  buy_hold: { name: "Купити й тримати", about: "Еталон: купує на старті й нічого не робить. Стратегія має бути кращою за нього." },
+  chandelier_trend: { name: "Тренд із плаваючим стопом", about: "Йде за трендом і виходить за стопом, що підтягується за ціною." },
+  chandelier_trend_4h: { name: "Тренд із плаваючим стопом, 4 год", about: "Та сама стратегія на 4-годинних свічках: менше угод." },
+  grid: { name: "Сітка", about: "Купує нижче й продає вище опорної ціни рівними кроками." },
+  lgbm: { name: "LightGBM", about: "ML-модель: щоночі вчиться передбачати рух ціни." },
+  rl: { name: "RL-агент", about: "Нейромережа, яка вчиться торгувати методом спроб і помилок." },
+  regime_switch: { name: "Перемикач режимів", about: "У тренді йде за ціною, у боковику чекає на повернення до середнього." },
+  rsi_mr: { name: "RSI, повернення до середнього", about: "Купує перепроданість і продає перекупленість." },
+  vol_scaled_trend: { name: "Тренд із поправкою на волатильність", about: "Йде за трендом і зменшує позицію, коли ринок нервує." },
+  analog: { name: "Історичні аналоги", about: "Шукає схожі моменти в минулому й дивиться, що було далі." },
+  seasonality: { name: "Сезонність", about: "Торгує години й дні тижня, які в минулому були кращими." },
+  adx_trend: { name: "Тренд за ADX", about: "Входить у тренд, лише коли ADX показує, що він сильний." },
+  zscore: { name: "Z-оцінка", about: "Ставить на повернення ціни після сильного відхилення від середньої." },
+  macd: { name: "MACD", about: "Сигнали від різниці двох ковзних середніх." },
+  tsmom: { name: "Часовий моментум", about: "Купує те, що зростало за останній період, і продає те, що падало." },
+  donchian: { name: "Канал Дончіана", about: "Входить на пробої максимуму чи мінімуму за період." },
+  keltner: { name: "Канал Кельтнера", about: "Входить на пробої каналу, побудованого за ATR." },
+};
+
+const TWIN = "news_";
+
+export function agentName(id: string): string {
+  if (id.startsWith(TWIN)) return `${agentName(id.slice(TWIN.length))} + новини`;
+  return AGENTS[id]?.name ?? id;
+}
+
+export function agentAbout(id: string): string {
+  if (id.startsWith(TWIN)) return `Копія стратегії «${agentName(id.slice(TWIN.length))}», яка зменшує позицію за фільтром новин. Тест фільтра.`;
+  return AGENTS[id]?.about ?? "";
+}
+
+export const pairName = (symbol: string): string => symbol.replace(":USDT", "");
+export const coinName = (symbol: string): string => symbol.split("/")[0];

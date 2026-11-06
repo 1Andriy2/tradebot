@@ -37,6 +37,7 @@ MAX_DOWNLOAD = 30_000_000  # a GDELT file is about 8 MB
 MAX_UNZIPPED = 200_000_000
 COLLECT_SECONDS = 120  # the job gets 10 minutes: leave room to score and save what was found
 ASSET_SOURCES = ("google_", "yahoo_", "filings_")  # names of sources for followed assets
+BACKFILL_DAYS = 30  # how far back a new subscription starts; Google News answers with up to 100 items
 WORKERS = 8  # downloads are independent, and the level should be ready before the bar closes
 MAX_TEXT = 500
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -195,10 +196,16 @@ def search_name(asset: Item) -> str:
     return re.sub(r"^the\s+", "", name, flags=re.I)
 
 
+def needs_backfill(asset: Item) -> bool:
+    """History is fetched once. A run forgets links after a few days, so asking for a month on every
+    run would bring the same old stories back to the model again and again."""
+    return not asset.get("backfilled_at")
+
+
 def _for_asset(rows: list[Item], asset: Item) -> list[Item]:
     """Tag items with the asset, keeping only headlines that really name it."""
-    name, ticker = search_name(asset), str(asset["ticker"])
-    return [{**r, "kind": WATCH, "watch": asset["id"], "ticker": ticker} for r in rows
+    name, ticker, backfill = search_name(asset), str(asset["ticker"]), needs_backfill(asset)
+    return [{**r, "kind": WATCH, "watch": asset["id"], "ticker": ticker, "backfill": backfill} for r in rows
             if mentions(r["title"], name, ticker)]
 
 
@@ -215,7 +222,8 @@ def parse_google(content: bytes, seen_at: pd.Timestamp) -> list[Item]:
 
 def _google(asset: Item) -> Source:
     words = f'"{search_name(asset)}"' + (" crypto" if asset["kind"] == "crypto" else "")
-    query = urlencode({"q": f"{words} when:1d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    window = f"{BACKFILL_DAYS}d" if needs_backfill(asset) else "1d"
+    query = urlencode({"q": f"{words} when:{window}", "hl": "en-US", "gl": "US", "ceid": "US:en"})
     return lambda fetch, now: _for_asset(parse_google(fetch(f"{GOOGLE_NEWS}?{query}"), now), asset)
 
 

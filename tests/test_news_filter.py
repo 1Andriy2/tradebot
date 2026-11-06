@@ -536,6 +536,75 @@ def test_a_run_reads_the_watchlist_it_is_given() -> None:
     assert report.scored == 1
 
 
+# History of a new subscription
+
+def history(age: str, **over: Any) -> dict[str, Any]:
+    return {**watched_item(), "published": NOW - pd.Timedelta(age), "backfill": True, **over}
+
+
+def test_a_new_subscription_is_searched_a_month_back_and_a_known_one_a_day() -> None:
+    asked: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        asked.append(url)
+        return google_feed()
+
+    sources.asset_sources([SOL])["google_crypto:solana"](fetch, NOW)
+    sources.asset_sources([{**SOL, "backfilled_at": "2026-11-01"}])["google_crypto:solana"](fetch, NOW)
+    assert "when%3A30d" in asked[0] and "when%3A1d" in asked[1]
+
+
+def test_only_a_first_search_marks_its_stories_as_history() -> None:
+    feed = google_feed(("Solana rallies", "CoinDesk", "https://x.example/1"))
+    fresh = sources.asset_sources([SOL])["google_crypto:solana"](lambda _: feed, NOW)
+    known = sources.asset_sources([{**SOL, "backfilled_at": "2026-11-01"}])["google_crypto:solana"](
+        lambda _: feed, NOW)
+    assert fresh[0]["backfill"] is True and known[0]["backfill"] is False
+
+
+def test_history_of_a_new_subscription_is_scored() -> None:
+    frame, report = run_watched([history("20D")], answering())
+    assert frame.iloc[0]["status"] == pipeline.SCORED and report.scored == 1
+
+
+def test_history_stops_at_its_window() -> None:
+    frame, report = run_watched([history("31D")], answering())
+    assert frame.iloc[0]["status"] == pipeline.OLD and report.scored == 0
+
+
+def test_after_the_first_search_old_stories_of_an_asset_stay_old() -> None:
+    frame, _ = run_watched([history("3D", backfill=False)], answering())
+    assert frame.iloc[0]["status"] == pipeline.OLD
+
+
+def test_history_never_reaches_the_risk_level() -> None:
+    _, report = run_watched([history("2D")], answering(-1.0))
+    assert all(r["level"] == "trade" and r["events"] == 0 for r in report.risk)
+
+
+def test_history_waits_behind_todays_news_and_goes_newest_first() -> None:
+    old = history("20D", url="https://x.example/old", title="Solana rallies on upgrade news")
+    older = history("25D", url="https://x.example/older", title="Solana validators vote today")
+    today = news_item("Bitcoin falls", "https://x.example/today")
+    frame = pipeline.ingest(pipeline.typed(pd.DataFrame()), [older, old, today], NOW)
+    assert list(pipeline.to_score(frame, NOW, CFG)["url"]) == [today["url"], old["url"], older["url"]]
+
+
+def test_the_history_window_closes_only_after_the_search_answered() -> None:
+    store = MemoryStore()
+    store.insert("watchlist", [SOL, NVDA])
+    pipeline.mark_backfilled(store, store.select("watchlist"),
+                             {"google_crypto:solana": 12, "google_stock:NVDA": -1}, NOW)
+    state = {r["id"]: r.get("backfilled_at") for r in store.select("watchlist")}
+    assert state["crypto:solana"] and not state["stock:NVDA"]
+
+
+def test_marking_history_cannot_bring_back_an_unsubscribed_asset() -> None:
+    store = MemoryStore()
+    pipeline.mark_backfilled(store, [SOL], {"google_crypto:solana": 12}, NOW)
+    assert store.select("watchlist") == []
+
+
 # Filters
 
 def test_official_sources_always_pass_but_others_need_a_watched_term() -> None:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Empty, ErrorNote, PageTitle } from "@/components/ui";
+import { Chips, Empty, ErrorNote, PageTitle } from "@/components/ui";
 import { Watchlist } from "@/components/Watchlist";
 import {
   ago, ASSETS, assetList, byDay, CHANNELS, concerns, EVENT_TYPES, fmtClock, fmtImpact, fmtMult, LEVELS, outletName,
@@ -12,6 +12,7 @@ import { useNow } from "@/lib/useNow";
 import { useRows } from "@/lib/useRows";
 
 const DAYS = 7;
+const MAX_FOLLOWED = 5000; // stories of followed assets, which are read with all their history
 const MAX_STORIES = DAYS * 1500; // the news job scores at most 1500 a day, so this never cuts the week
 const LEVEL_MAX_AGE_MS = 3_600_000; // the same limit the test agents apply
 const REFRESH_MS = 3_600_000; // a week of stories is the heavy read: an open tab repeats it hourly at most
@@ -27,33 +28,6 @@ const VIEWS: Record<string, { label: string; test: (i: NewsItemRow) => boolean }
 
 const ASSET_FILTERS: Record<string, string> = { all: "Усі активи", BTC: "BTC", ETH: "ETH", CRYPTO: "Крипторинок", STOCKS: "Акції" };
 const CHANNEL_FILTERS: Record<string, string> = { all: "Будь-який вплив", direct: "Прямий", indirect: "Непрямий" };
-
-function Chips({ value, onChange, options, label }: {
-  value: string;
-  onChange: (v: string) => void;
-  options: [string, string][];
-  label: string;
-}) {
-  return (
-    <div role="group" aria-label={label} className="flex flex-wrap gap-1.5">
-      {options.map(([key, text]) => (
-        <button
-          key={key}
-          type="button"
-          aria-pressed={value === key}
-          onClick={() => onChange(key)}
-          className={`rounded-full px-3 py-1 text-sm transition-colors ${
-            value === key
-              ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
-              : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-          }`}
-        >
-          {text}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function Pressure({ label, value, color }: { label: string; value: number; color: string }) {
   return (
@@ -167,11 +141,15 @@ export default function NewsPage() {
   const news = useRows<NewsItemRow>("news_items", {
     order: { column: "first_seen", tiebreak: "cluster" }, limit: MAX_STORIES, sinceDays: { column: "first_seen", days: DAYS },
   });
+  const followed = useRows<NewsItemRow>("news_items", {
+    filters: { kind: "watch" }, order: { column: "first_seen", tiebreak: "cluster" }, limit: MAX_FOLLOWED,
+  });
   const levels = useRows<NewsLevelRow>("news_levels", { realtime: true });
   const watchlist = useRows<WatchRow>("watchlist", { order: { column: "added_at", ascending: true }, realtime: true });
 
   // Stories are the heavy table: refetch them at most hourly, and only for a tab someone is looking at.
-  const { reload } = news;
+  const { reload: reloadNews } = news;
+  const { reload: reloadFollowed } = followed;
   const updatedAt = levels.rows.map((r) => r.updated_at).sort().at(-1);
   const loadedAt = useRef(0);
   const subscribedAt = useRef(0);
@@ -183,24 +161,33 @@ export default function NewsPage() {
       else if (document.visibilityState === "visible"
         && (time - loadedAt.current >= REFRESH_MS || time - subscribedAt.current < FRESH_SUBSCRIPTION_MS)) {
         loadedAt.current = time;
-        void reload();
+        void reloadNews();
+        void reloadFollowed();
       }
     };
     refresh();
     document.addEventListener("visibilitychange", refresh);
     return () => document.removeEventListener("visibilitychange", refresh);
-  }, [updatedAt, reload]);
+  }, [updatedAt, reloadNews, reloadFollowed]);
 
-  const topics = useMemo(() => [...new Set(news.rows.map((i) => i.event_type))].sort(), [news.rows]);
+  // The general week plus the whole history of what is followed now. An unsubscribed asset's old
+  // stories stay in the table, in case it is followed again, but they leave the page at once.
+  const stories = useMemo(() => {
+    const tickers = new Set(watchlist.rows.map((w) => w.ticker));
+    const merged = new Map([...news.rows, ...followed.rows].map((i) => [i.cluster, i]));
+    return [...merged.values()].filter((i) => i.kind !== "watch" || assetList(i).some((a) => tickers.has(a)));
+  }, [news.rows, followed.rows, watchlist.rows]);
+
+  const topics = useMemo(() => [...new Set(stories.map((i) => i.event_type))].sort(), [stories]);
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase();
-    return news.rows.filter((i) => VIEWS[view].test(i)
+    return stories.filter((i) => VIEWS[view].test(i)
       && (asset === "all" || concerns(i, asset))
       && (channel === "all" || i.channel === channel)
       && (topic === "all" || i.event_type === topic)
       && (!words || `${i.title} ${i.title_uk} ${i.subject} ${i.reason}`.toLowerCase().includes(words)))
       .sort((a, b) => new Date(storyTime(b)).getTime() - new Date(storyTime(a)).getTime());
-  }, [news.rows, view, asset, channel, topic, query]);
+  }, [stories, view, asset, channel, topic, query]);
 
   const assetFilters = Object.entries(ASSET_FILTERS).concat(
     [...new Set(watchlist.rows.map((w) => w.ticker))].filter((t) => !(t in ASSET_FILTERS))
@@ -211,7 +198,7 @@ export default function NewsPage() {
   return (
     <>
       <PageTitle>Новини та ризик</PageTitle>
-      <ErrorNote error={news.error ?? levels.error ?? watchlist.error} />
+      <ErrorNote error={news.error ?? followed.error ?? levels.error ?? watchlist.error} />
 
       {cards.length > 0 && (
         <>
@@ -264,7 +251,7 @@ export default function NewsPage() {
               {topics.map((t) => <option key={t} value={t}>{EVENT_TYPES[t] ?? t}</option>)}
             </select>
             <span className="ml-auto text-xs text-slate-500 dark:text-slate-400" aria-live="polite">
-              Показано {shown.length} з {news.rows.length}
+              Показано {shown.length} з {stories.length}
             </span>
           </div>
         </div>
@@ -283,7 +270,7 @@ export default function NewsPage() {
             </div>
           ))
         ) : (
-          <Empty>{news.rows.length ? "За цими фільтрами новин немає" : "Новин ще немає"}</Empty>
+          <Empty>{stories.length ? "За цими фільтрами новин немає" : "Новин ще немає"}</Empty>
         )}
       </section>
     </>

@@ -134,6 +134,11 @@ class Trader:
                 except Exception as exc:
                     self._error(report, f"{agent.id}/{symbol}: {exc!r}", agent.id)
         self._snapshot_equity()
+        if self.venue is not None:
+            try:
+                self._retire_demo_positions(champion)
+            except Exception as exc:
+                self._error(report, f"demo positions: {exc!r}")
         self._status(report)
         return report
 
@@ -203,6 +208,15 @@ class Trader:
             "avg_entry": book.avg_entry or None, "stop_loss": state.sl, "take_profit": state.tp,
             "updated_at": pd.Timestamp.now(tz="UTC"),
         }], on_conflict="agent_id,venue,symbol")
+
+    def _retire_demo_positions(self, champion: str) -> None:
+        """The account holds one position per symbol, and it belongs to the champion. A former
+        champion is no longer stepped, so its row would go on showing a position it gave up."""
+        retired = [{**r, "units": 0.0, "avg_entry": None, "stop_loss": None, "take_profit": None,
+                    "updated_at": pd.Timestamp.now(tz="UTC")}
+                   for r in self.store.select("positions", {"venue": "demo"})
+                   if r["agent_id"] != champion and abs(r["units"]) > EPS]
+        self.store.upsert("positions", retired, on_conflict="agent_id,venue,symbol")
 
     def _restore(self, row: dict[str, Any] | None, equity: float,
                  policy: DecisionPolicy) -> tuple[PolicyState, PaperBook]:

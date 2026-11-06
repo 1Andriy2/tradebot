@@ -27,6 +27,7 @@ def _clean(value: Any) -> Any:
 class Store(Protocol):
     def insert(self, table: str, rows: list[dict[str, Any]]) -> None: ...
     def upsert(self, table: str, rows: list[dict[str, Any]], on_conflict: str) -> None: ...
+    def update(self, table: str, values: dict[str, Any], filters: dict[str, Any]) -> None: ...
     def select(self, table: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]: ...
     def upload(self, bucket: str, path: str, data: bytes) -> None: ...
     def download(self, bucket: str, path: str) -> bytes: ...
@@ -62,6 +63,12 @@ class MemoryStore:
             else:
                 existing.append(row)
 
+    def update(self, table: str, values: dict[str, Any], filters: dict[str, Any]) -> None:
+        rows = self.tables[table]
+        for i, row in enumerate(rows):
+            if all(row.get(k) == v for k, v in filters.items()):
+                rows[i] = {**row, **_roundtrip(values)}
+
     def select(self, table: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
         return [r for r in self.tables[table] if all(r.get(k) == v for k, v in filters.items())]
@@ -89,6 +96,12 @@ class SupabaseStore:
     def upsert(self, table: str, rows: list[dict[str, Any]], on_conflict: str) -> None:
         if rows:
             self.client.table(table).upsert([_clean(r) for r in rows], on_conflict=on_conflict).execute()
+
+    def update(self, table: str, values: dict[str, Any], filters: dict[str, Any]) -> None:
+        q = self.client.table(table).update(_clean(values))
+        for k, v in filters.items():
+            q = q.eq(k, v)
+        q.execute()
 
     def select(self, table: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         q = self.client.table(table).select("*")

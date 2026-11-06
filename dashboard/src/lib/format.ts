@@ -26,6 +26,31 @@ export function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${(v * 100).toLocaleString("uk-UA", { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
 }
 
+export function fmtDay(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat("uk-UA", { timeZone: TZ, day: "numeric", month: "long" }).format(new Date(iso));
+}
+
+const signOf = (v: number) => (v > 0 ? "+" : v < 0 ? "−" : "");
+
+export function fmtSignedPct(v: number | null | undefined, digits = 2): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${signOf(v)}${fmtPct(Math.abs(v), digits)}`;
+}
+
+export function fmtSignedUsd(v: number | null | undefined, digits = 2): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return `${signOf(v)}${fmtUsd(Math.abs(v), digits)}`;
+}
+
+export function fmtDuration(from: string, to: string): string {
+  const minutes = Math.round((new Date(to).getTime() - new Date(from).getTime()) / 60_000);
+  if (minutes < 60) return `${minutes} хв`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours} год ${minutes % 60} хв` : `${hours} год`;
+  return `${Math.floor(hours / 24)} дн ${hours % 24} год`;
+}
+
 /** Kyiv-local label for chart axes (timestamps stay in UTC seconds). */
 export function kyivTick(unixSeconds: number): string {
   return new Intl.DateTimeFormat("uk-UA", {
@@ -48,6 +73,7 @@ export const REASONS: Record<string, string> = {
   no_change: "без змін",
   risk_cap: "перевищення ліміту позиції",
   news_filter: "фільтр новин",
+  adopted: "перейшла від попереднього чемпіона",
 };
 
 export const reason = (r: string) => REASONS[r] ?? r;

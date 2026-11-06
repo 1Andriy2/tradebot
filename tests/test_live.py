@@ -158,6 +158,19 @@ def test_kill_switch_closes_demo_position() -> None:
     assert any(e["type"] == "kill_switch" for e in store.select("events"))
 
 
+def test_a_new_champion_takes_over_the_demo_positions() -> None:
+    public, venue = FakePublic(), FakeVenue()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    assert store.select("positions", {"agent_id": "ma_cross", "venue": "demo"})[0]["units"] > 0
+    store.upsert("champion", [{"id": 1, "agent_id": "flat"}], on_conflict="id")
+    public.add_bar(100.0)
+    trader.step()
+    held = {r["agent_id"]: r for r in store.select("positions", {"venue": "demo"})}
+    assert held["ma_cross"]["units"] == 0 and held["ma_cross"]["stop_loss"] is None
+    assert venue.units["BTC/USDT:USDT"] == held["flat"]["units"]  # the account itself is not touched
+
+
 def test_flip_closes_then_opens() -> None:
     public, venue = FakePublic(), FakeVenue()
     trader, _ = make_trader(venue, public)

@@ -259,7 +259,7 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     """Collect and score news into a risk level. Only a shadow agent reads it."""
     from tradebot.news.filters import relevant
-    from tradebot.news.pipeline import run
+    from tradebot.news.pipeline import mark_backfilled, run
     from tradebot.news.scoring import providers_from_env
     from tradebot.news.sources import all_sources, collect, search_name
 
@@ -284,6 +284,10 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     report = run(store, all_sources(channels, watchlist), providers, settings.news, now,
                  clock=lambda: pd.Timestamp.now(tz="UTC"),
                  watched=None if watchlist is None else {str(a["id"]): search_name(a) for a in watchlist})
+    try:
+        mark_backfilled(store, watchlist or [], report.counts, now)
+    except Exception as exc:  # the next run fetches the history again, and known links are skipped
+        log.warning("backfill not marked: %s", type(exc).__name__)
     failed = [name for name, count in report.counts.items() if count < 0]
     print(f"sources {report.sources_ok}/{len(report.counts)} new={report.new} scored={report.scored} "
           f"pending={report.pending} failed={failed}")

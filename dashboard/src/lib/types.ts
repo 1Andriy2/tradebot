@@ -16,6 +16,20 @@ export interface EquityRow {
   equity: number;
 }
 
+/** One test agent since it started: the view agent_live_stats. */
+export interface AgentStatsRow {
+  agent_id: string;
+  started_at: string;
+  start_equity: number;
+  equity: number;
+  equity_day_ago: number | null;
+  max_drawdown: number;
+  trades: number;
+  wins: number;
+  gross_win: number;
+  gross_loss: number;
+}
+
 export interface PositionRow {
   agent_id: string;
   venue: Venue;

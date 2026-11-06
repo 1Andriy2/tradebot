@@ -1,85 +1,150 @@
 "use client";
 
 import { useMemo } from "react";
-import { Card, Empty, ErrorNote, PageTitle, Table } from "@/components/ui";
-import { fmtNum, fmtPct, fmtTime, pnlClass } from "@/lib/format";
-import { liveMetrics } from "@/lib/metrics";
-import type { BacktestRow, EquityRow, TradeRow } from "@/lib/types";
+import { Badge, Card, Empty, ErrorNote, Hint, Note, PageTitle, Table } from "@/components/ui";
+import { agentAbout, agentName, coinName } from "@/lib/agents";
+import { fmtDay, fmtNum, fmtPct, fmtSignedPct, pnlClass } from "@/lib/format";
+import type { AgentStatsRow, BacktestRow, ChampionRow, PositionRow } from "@/lib/types";
+import { useNow } from "@/lib/useNow";
 import { useRows } from "@/lib/useRows";
 
+const MIN_TRADES = 30; // the same number the promotion rule asks for
+
+const LIVE_HEAD = [
+  "#", "Агент",
+  { label: "Старт", hint: "Коли агент почав торгувати. Агенти додавались у різні дні, тому порівнюйте з поправкою на це." },
+  { label: "З початку", right: true, hint: "Дохідність від старту агента. Рахунок не скидається: кожен почав із 10 000 USDT і веде його далі." },
+  { label: "За добу", right: true, hint: "Зміна за останні 24 години. Ця колонка показує, що сталося сьогодні." },
+  { label: "Макс. просідання", right: true, hint: "Найбільше падіння від піку рахунку. Менше краще." },
+  { label: "Угод", right: true, hint: `Закриті угоди. Менше ${MIN_TRADES} угод ще нічого не доводять.` },
+  { label: "Успішних", right: true, hint: "Частка прибуткових угод." },
+  { label: "Profit factor", right: true, hint: "Сума прибутків, поділена на суму збитків. Вище 1 означає, що стратегія заробляє." },
+  "Зараз",
+];
+
+const TEST_HEAD = [
+  "Стратегія",
+  { label: "BTC", right: true, hint: "Дохідність на BTC за весь період тесту, з комісіями." },
+  { label: "ETH", right: true, hint: "Дохідність на ETH за весь період тесту, з комісіями." },
+  { label: "Проти утримання", right: true, hint: "Наскільки стратегія краща чи гірша за просте утримання монети. Середнє за BTC і ETH." },
+  { label: "Sortino", right: true, hint: "Дохідність відносно падінь. Вище нуля добре, нижче нуля стратегія втрачала. Середнє за BTC і ETH." },
+  { label: "Макс. просідання", right: true, hint: "Найбільше падіння від піку, гірше з двох монет." },
+  { label: "Угод", right: true, hint: "Угоди за весь період на обох монетах разом." },
+  { label: "Пораховано", hint: "Коли тест запускався востаннє. Моделі перевіряються, коли навчаються." },
+];
+
+interface Test {
+  id: string;
+  btc?: BacktestRow;
+  eth?: BacktestRow;
+}
+
+const mean = (values: (number | undefined)[]) => {
+  const known = values.filter((v): v is number => v != null);
+  return known.length ? known.reduce((a, b) => a + b, 0) / known.length : null;
+};
+
 export default function LeaderboardPage() {
-  const equity = useRows<EquityRow>("equity_snapshots", {
-    filters: { venue: "shadow" }, sinceDays: { column: "ts", days: 30 },
-    order: { column: "ts", ascending: true }, limit: 30_000,
-  });
-  const trades = useRows<TradeRow>("trades", {
-    filters: { venue: "shadow" }, sinceDays: { column: "exit_time", days: 30 }, limit: 10_000,
-  });
+  const now = useNow();
+  const stats = useRows<AgentStatsRow>("agent_live_stats");
+  const positions = useRows<PositionRow>("positions", { filters: { venue: "shadow" } });
+  const champion = useRows<ChampionRow>("champion");
   const backtests = useRows<BacktestRow>("backtest_results", { order: { column: "created_at" }, limit: 500 });
+  const championId = champion.rows[0]?.agent_id;
 
-  const live = useMemo(() => {
-    const ids = [...new Set(equity.rows.map((r) => r.agent_id))];
-    return ids
-      .map((id) => ({
-        id,
-        m: liveMetrics(equity.rows.filter((r) => r.agent_id === id), trades.rows.filter((t) => t.agent_id === id)),
-      }))
-      .sort((a, b) => b.m.sharpe - a.m.sharpe);
-  }, [equity.rows, trades.rows]);
+  const live = useMemo(() => stats.rows
+    .map((s) => ({ ...s, total: s.equity / s.start_equity - 1, day: s.equity_day_ago ? s.equity / s.equity_day_ago - 1 : null }))
+    .sort((a, b) => b.total - a.total), [stats.rows]);
 
-  // Latest backtest per (label, symbol, timeframe).
-  const latestBt = useMemo(() => {
-    const seen = new Map<string, BacktestRow>();
+  const holding = (id: string) => positions.rows
+    .filter((p) => p.agent_id === id && Math.abs(p.units) > 1e-12)
+    .map((p) => `${coinName(p.symbol)} ${p.units > 0 ? "Long" : "Short"}`);
+
+  // The newest test of each strategy. Versions of a model are one strategy, so only the last one counts.
+  const tests = useMemo(() => {
+    const seen = new Map<string, Test>();
     for (const r of backtests.rows) {
-      const k = `${r.label}|${r.symbol}|${r.timeframe}`;
-      if (!seen.has(k)) seen.set(k, r);
+      const test = seen.get(r.agent_id) ?? { id: r.agent_id };
+      const coin = coinName(r.symbol) === "BTC" ? "btc" : "eth";
+      test[coin] ??= r;
+      seen.set(r.agent_id, test);
     }
-    return [...seen.values()].sort((a, b) => (b.metrics.sortino ?? 0) - (a.metrics.sortino ?? 0));
+    const score = (t: Test) => mean([t.btc?.metrics.sortino, t.eth?.metrics.sortino]) ?? -Infinity;
+    return [...seen.values()].sort((a, b) => score(b) - score(a));
   }, [backtests.rows]);
+
+  const newest = tests.flatMap((t) => [t.btc, t.eth]).find(Boolean);
+  const leader = live[0];
+  const days = leader && now ? Math.max(1, Math.round((now - new Date(leader.started_at).getTime()) / 86_400_000)) : 0;
 
   return (
     <>
-      <PageTitle>Рейтинг стратегій і моделей</PageTitle>
-      <ErrorNote error={equity.error ?? trades.error ?? backtests.error} />
-      <Card title="Наживо (тіньові рахунки, 30 днів), сортування за Sharpe" className="mb-4">
+      <PageTitle intro="Два різні змагання. Перше йде просто зараз на свіжих цінах. Друге показує, як стратегії пройшли б минулі місяці.">
+        Рейтинг стратегій
+      </PageTitle>
+      <ErrorNote error={stats.error ?? backtests.error} />
+
+      <Card title="Наживо: паперові рахунки" className="mb-4"
+        hint="Кожен агент торгує своїми 10 000 USDT на реальних цінах, рахунки не скидаються. Вища дохідність вгорі.">
         {live.length ? (
-          <Table head={["#", "Агент", "Дохідність", "Sharpe", "Макс. просідання", "Win rate", "Profit factor", "Угод"]}>
-            {live.map(({ id, m }, i) => (
-              <tr key={id}>
-                <td>{i + 1}</td>
-                <td className="font-medium">{id}</td>
-                <td className={pnlClass(m.totalReturn)}>{fmtPct(m.totalReturn)}</td>
-                <td>{fmtNum(m.sharpe)}</td>
-                <td>{fmtPct(m.maxDrawdown)}</td>
-                <td>{fmtPct(m.winRate, 0)}</td>
-                <td>{Number.isFinite(m.profitFactor) ? fmtNum(m.profitFactor) : "∞"}</td>
-                <td>{m.trades}</td>
-              </tr>
-            ))}
-          </Table>
+          <>
+            <Table head={LIVE_HEAD}>
+              {live.map((s, i) => {
+                const lean = s.trades < MIN_TRADES;
+                return (
+                  <tr key={s.agent_id}>
+                    <td className="text-slate-500">{i + 1}</td>
+                    <td>
+                      <span className="font-medium"><Hint text={agentAbout(s.agent_id)}>{agentName(s.agent_id)}</Hint></span>
+                      {s.agent_id === championId && <span className="ml-2"><Badge tone="amber">торгує на демо</Badge></span>}
+                    </td>
+                    <td>{fmtDay(s.started_at)}</td>
+                    <td className={`text-right font-semibold ${pnlClass(s.total)}`}>{fmtSignedPct(s.total)}</td>
+                    <td className={`text-right ${s.day == null ? "" : pnlClass(s.day)}`}>{fmtSignedPct(s.day)}</td>
+                    <td className="text-right">{fmtPct(s.max_drawdown)}</td>
+                    <td className={`text-right ${lean ? "text-slate-400" : ""}`}>{s.trades}</td>
+                    <td className="text-right">{s.trades ? fmtPct(s.wins / s.trades, 0) : "—"}</td>
+                    <td className="text-right">
+                      {s.gross_loss > 0 ? fmtNum(s.gross_win / s.gross_loss) : s.gross_win > 0 ? "∞" : "—"}
+                    </td>
+                    <td className="text-xs text-slate-500 dark:text-slate-400">{holding(s.agent_id).join(", ") || "поза ринком"}</td>
+                  </tr>
+                );
+              })}
+            </Table>
+            {days > 0 && days < 30 && (
+              <div className="mt-3">
+                <Note>Змагання триває лише {days} дн. За такий час місця в таблиці вирішує випадок, а не якість стратегії.</Note>
+              </div>
+            )}
+          </>
         ) : <Empty />}
       </Card>
-      <Card title="Бектести (out-of-sample, з комісіями), сортування за Sortino">
-        {latestBt.length ? (
-          <Table head={["Стратегія", "Пара", "ТФ", "Період", "Дохідність", "vs Buy&Hold", "Sharpe", "Sortino", "Макс. просідання", "Win rate", "PF", "Угод"]}>
-            {latestBt.map((r) => (
-              <tr key={r.id}>
-                <td className="font-medium">{r.label}</td>
-                <td>{r.symbol.replace(":USDT", "")}</td>
-                <td>{r.timeframe}</td>
-                <td>{fmtTime(r.period_start).slice(0, 5)}–{fmtTime(r.period_end).slice(0, 5)}</td>
-                <td className={pnlClass(r.metrics.total_return)}>{fmtPct(r.metrics.total_return)}</td>
-                <td className={pnlClass(r.metrics.excess_vs_buy_hold)}>{fmtPct(r.metrics.excess_vs_buy_hold)}</td>
-                <td>{fmtNum(r.metrics.sharpe)}</td>
-                <td>{fmtNum(r.metrics.sortino)}</td>
-                <td>{fmtPct(r.metrics.max_drawdown)}</td>
-                <td>{fmtPct(r.metrics.win_rate, 0)}</td>
-                <td>{r.metrics.profit_factor == null ? "∞" : fmtNum(r.metrics.profit_factor)}</td>
-                <td>{r.metrics.num_trades}</td>
-              </tr>
-            ))}
+
+      <Card title="Історичний тест: останні 9 місяців"
+        hint={<>Щоночі той самий тест запускається заново, а вікно зсувається на один день{newest ? ` (зараз ${fmtDay(newest.period_start)} – ${fmtDay(newest.period_end)})` : ""}. Тому цифри майже не змінюються день у день: це нормально, це не скидання. Позиції тут менші, ніж на біржі: 10% рахунку.</>}>
+        {tests.length ? (
+          <Table head={TEST_HEAD}>
+            {tests.map((t) => {
+              const excess = mean([t.btc?.metrics.excess_vs_buy_hold, t.eth?.metrics.excess_vs_buy_hold]);
+              const sortino = mean([t.btc?.metrics.sortino, t.eth?.metrics.sortino]);
+              const drawdown = Math.max(t.btc?.metrics.max_drawdown ?? 0, t.eth?.metrics.max_drawdown ?? 0);
+              const made = (t.btc ?? t.eth)?.created_at;
+              return (
+                <tr key={t.id}>
+                  <td className="font-medium"><Hint text={agentAbout(t.id)}>{agentName(t.id)}</Hint></td>
+                  <td className={`text-right ${pnlClass(t.btc?.metrics.total_return ?? 0)}`}>{fmtSignedPct(t.btc?.metrics.total_return)}</td>
+                  <td className={`text-right ${pnlClass(t.eth?.metrics.total_return ?? 0)}`}>{fmtSignedPct(t.eth?.metrics.total_return)}</td>
+                  <td className={`text-right ${pnlClass(excess ?? 0)}`}>{fmtSignedPct(excess)}</td>
+                  <td className="text-right">{fmtNum(sortino)}</td>
+                  <td className="text-right">{fmtPct(drawdown)}</td>
+                  <td className="text-right">{(t.btc?.metrics.num_trades ?? 0) + (t.eth?.metrics.num_trades ?? 0)}</td>
+                  <td className="text-slate-500 dark:text-slate-400">{fmtDay(made)}</td>
+                </tr>
+              );
+            })}
           </Table>
-        ) : <Empty>Бектестів ще немає</Empty>}
+        ) : <Empty>Тестів ще немає</Empty>}
       </Card>
     </>
   );

@@ -8,10 +8,14 @@ interface Options {
   /** Max rows; fetched in pages of 1000 (the PostgREST default cap). */
   limit?: number;
   filters?: Record<string, string | number | boolean>;
+  /** Leave out rows where the column holds one of these values. */
+  exclude?: Record<string, string[]>;
   /** Only rows with `column >= days ago`. */
   sinceDays?: { column: string; days: number };
   /** Re-fetch when this table changes (Supabase Realtime). */
   realtime?: boolean;
+  /** The table to watch, when reading from a view of it. */
+  listen?: string;
 }
 
 const PAGE = 1000;
@@ -33,6 +37,7 @@ export function useRows<T>(table: string, opts: Options = {}) {
     for (let from = 0; from < limit; from += PAGE) {
       let q = supabaseBrowser().from(table).select("*");
       for (const [col, val] of Object.entries(o.filters ?? {})) q = q.eq(col, val);
+      for (const [col, vals] of Object.entries(o.exclude ?? {})) q = q.not(col, "in", `(${vals.join(",")})`);
       if (o.sinceDays) {
         const since = new Date(Date.now() - o.sinceDays.days * 86_400_000).toISOString();
         q = q.gte(o.sinceDays.column, since);
@@ -61,7 +66,7 @@ export function useRows<T>(table: string, opts: Options = {}) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const channel = supabaseBrowser()
       .channel(`rt-${table}-${key}`)
-      .on("postgres_changes", { event: "*", schema: "public", table }, () => {
+      .on("postgres_changes", { event: "*", schema: "public", table: opts.listen ?? table }, () => {
         clearTimeout(timer);
         timer = setTimeout(() => void load(), REALTIME_DELAY_MS);
       })
@@ -70,7 +75,7 @@ export function useRows<T>(table: string, opts: Options = {}) {
       clearTimeout(timer);
       void supabaseBrowser().removeChannel(channel);
     };
-  }, [load, table, key, opts.realtime]);
+  }, [load, table, key, opts.realtime, opts.listen]);
 
   return { rows, error, loading, reload: load };
 }

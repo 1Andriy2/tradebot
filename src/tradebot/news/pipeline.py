@@ -21,7 +21,16 @@ from tradebot.news.archive import read_file, rotate, write_file
 from tradebot.news.filters import relevant, same_story, suspicious, words
 from tradebot.news.risk import assess
 from tradebot.news.scoring import PROMPT_VERSION, Assessment, Provider, score
-from tradebot.news.sources import ASSET_SOURCES, Fetch, Item, Source, collect, download
+from tradebot.news.sources import (
+    ASSET_SOURCES,
+    BACKFILL_DAYS,
+    Fetch,
+    Item,
+    Source,
+    collect,
+    download,
+    needs_backfill,
+)
 from tradebot.store import Store
 
 log = logging.getLogger(__name__)
@@ -46,6 +55,7 @@ REPUBLISH = pd.Timedelta("6h")  # a failed write to the page's tables is repaire
 GEO_STORIES_PER_RUN = 3
 # Official items come first: there are few, and the risk filter depends on them. Followed assets next.
 PRIORITY = {"official": 0, "watch": 1, "social": 2, "market": 3, "news": 4, "geo": 5}
+HISTORY_RANK = 9  # a new subscription's old stories wait behind everything that happened today
 
 TIMES = ["published", "first_seen", "scored_at"]
 NUMBERS = ["impact", "confidence"]
@@ -98,7 +108,8 @@ def story_id(url: str, lane: str = "") -> str:
 
 
 def first_status(item: Item, now: pd.Timestamp) -> str:
-    if now - item["published"] > MAX_AGE:
+    limit = pd.Timedelta(days=BACKFILL_DAYS) if item.get("backfill") else MAX_AGE
+    if now - item["published"] > limit:
         return OLD
     if not relevant(item):
         return IGNORED
@@ -165,7 +176,8 @@ def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.Data
     room = max(0, min(cfg.max_items_per_run, cfg.max_items_per_day - used))
     pending = frame[frame["status"] == PENDING]
     order = pending.assign(rank=pending["kind"].map(PRIORITY).fillna(9))
-    return order.sort_values(["rank", "first_seen"], ascending=[True, False]).head(room)
+    order.loc[order["first_seen"] - order["published"] > MAX_AGE, "rank"] = HISTORY_RANK
+    return order.sort_values(["rank", "first_seen", "published"], ascending=[True, False, False]).head(room)
 
 
 def apply_scores(frame: pd.DataFrame, answers: dict[int, tuple[Assessment, str]],
@@ -276,6 +288,15 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     report.changes = level_changes(risk, report.risk)
     rows = pd.DataFrame(report.risk).drop(columns="top")  # headlines go to events, not this file
     return frame, rows if risk.empty else pd.concat([risk, rows], ignore_index=True), report
+
+
+def mark_backfilled(store: Store, watchlist: list[Item], counts: dict[str, int], now: pd.Timestamp) -> None:
+    """Close the history window of assets whose search answered. A failed search tries again next run,
+    and stories already found wait in the file, so no model outage can lose them. Updating, rather than
+    upserting, cannot bring back an asset that was unsubscribed during the run."""
+    for asset in watchlist:
+        if needs_backfill(asset) and counts.get(f"google_{asset['id']}", -1) >= 0:
+            store.update("watchlist", {"backfilled_at": now}, {"id": asset["id"]})
 
 
 def run(store: Store, sources: dict[str, Source], providers: list[Provider], cfg: NewsConfig,

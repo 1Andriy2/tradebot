@@ -64,7 +64,7 @@ export function Watchlist({ rows, onSubscribed, onRemoved }: {
     }
     setChoices([]);
     setQuery("");
-    setNote(`${item.name}: збір новин запущено, перші з'являться за хвилину-дві`);
+    setNote(`${item.name}: збір запущено: за хвилину-дві з'являться новини, зокрема за минулий місяць`);
     onSubscribed(item.ticker);
   }
 
