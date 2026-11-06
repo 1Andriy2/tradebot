@@ -169,6 +169,65 @@ def test_flip_closes_then_opens() -> None:
     assert venue.units["BTC/USDT:USDT"] < 0
 
 
+def demo_levels(store: MemoryStore) -> tuple[float | None, float | None]:
+    policy = store.select("agent_state", {"agent_id": "ma_cross", "venue": "demo"})[0]["state"]["policy"]
+    return policy["sl"], policy["tp"]
+
+
+def opened_then_reduced(venue: FakeVenue) -> tuple[FakePublic, Trader, MemoryStore]:
+    public = FakePublic()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    trader.agents[0].strategy.params["value"] = 0.5
+    public.add_bar(100.0)
+    trader.step()
+    return public, trader, store
+
+
+def test_a_partial_reduce_keeps_the_recorded_stops() -> None:
+    venue = FakeVenue()
+    _, _, store = opened_then_reduced(venue)
+    entry = venue.orders[0]
+    assert venue.orders[-1]["reduce_only"] is True
+    assert demo_levels(store) == (entry["sl"], entry["tp"])
+
+
+def test_an_exchange_stop_after_a_partial_reduce_is_recorded_as_a_stop() -> None:
+    """Regression: the levels were wiped, so the exit was logged as exchange_close at the close."""
+    venue = FakeVenue()
+    public, trader, store = opened_then_reduced(venue)
+    stop = venue.orders[0]["sl"]
+    venue.units["BTC/USDT:USDT"] = 0.0
+    public.add_bar(50.0)
+    assert not trader.step().errors
+    (trade,) = store.select("trades", {"agent_id": "ma_cross", "venue": "demo"})
+    assert trade["exit_reason"] == "stop_loss" and trade["exit_price"] == stop
+
+
+def test_an_order_too_small_to_send_keeps_the_recorded_stops() -> None:
+    class Skips(FakeVenue):
+        def market_order(self, symbol: str, qty: float, reduce_only: bool, ref_price: float,
+                         stop_loss: float | None = None, take_profit: float | None = None) -> Fill | None:
+            if reduce_only:
+                return None
+            return super().market_order(symbol, qty, reduce_only, ref_price, stop_loss, take_profit)
+
+    venue = Skips()
+    _, _, store = opened_then_reduced(venue)
+    assert demo_levels(store) == (venue.orders[0]["sl"], venue.orders[0]["tp"])
+
+
+def test_a_full_close_clears_the_recorded_stops() -> None:
+    venue = FakeVenue()
+    public = FakePublic()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    trader.agents[0].strategy.params["value"] = 0.0
+    public.add_bar(100.0)
+    trader.step()
+    assert demo_levels(store) == (None, None)
+
+
 def test_seconds_until_next_bar() -> None:
     assert seconds_until_next_bar(900 * 10 + 100, 900, 15) == pytest.approx(815)
     assert np.isfinite(seconds_until_next_bar(0, 900))

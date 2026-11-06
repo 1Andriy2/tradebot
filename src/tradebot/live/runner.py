@@ -363,8 +363,9 @@ class Trader:
             if fill:
                 orders += 1
                 ledger.fill(ts, ledger.units + fill.qty, fill.price, reason, slippage=False)
+                if flip_or_close:  # after a partial reduce the rest keeps its stop and take-profit
+                    state.sl = state.tp = None
             units = units + (fill.qty if fill else 0.0)
-            state.sl = state.tp = None
         remaining = target - units
         if abs(target) > EPS and abs(remaining) > EPS and np.sign(remaining) == np.sign(target):
             sl, tp = (policy.risk.stop_levels(np.sign(target), close, atr_now)
