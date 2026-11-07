@@ -34,6 +34,9 @@ COUNT_SOURCES = {
     "binance_futures": "https://fapi.binance.com/fapi/v1/ticker/24hr",
     "binance_spot": "https://data-api.binance.vision/api/v3/ticker/24hr",
 }
+# Long-lived coins for daily tests and the daily basket. None was used to choose a strategy, so results
+# on them are a fresh test. Being long-lived flatters them a little.
+DAILY_COINS = ("SOL", "XRP", "DOGE", "ADA", "LINK", "AVAX", "LTC", "BCH", "DOT", "TRX")
 FALLBACK = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT"]
 # Busy but flat: a coin pegged to the dollar has nothing for these strategies to trade.
 PEGGED = {"USDC", "USD1", "FDUSD", "TUSD", "DAI", "USDE", "USDS", "PYUSD", "RLUSD", "USDG", "EUR", "EURI"}

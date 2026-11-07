@@ -13,6 +13,7 @@ const COMPONENTS: Record<string, { label: string; staleMinutes: number }> = {
   trader: { label: "Торговий бот", staleMinutes: 40 },
   trainer: { label: "Нічне навчання", staleMinutes: 26 * 60 },
   scout: { label: "Лінія 5 хвилин", staleMinutes: 15 },
+  basket: { label: "Денний тренд на 10 монетах", staleMinutes: 40 },
   news_history: { label: "Новини за місяць", staleMinutes: Infinity },
 };
 

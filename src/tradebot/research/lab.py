@@ -43,9 +43,7 @@ log = logging.getLogger(__name__)
 
 EULER_GAMMA = 0.5772156649
 TF_RULES = {"15m": None, "1h": "1h", "4h": "4h", "1d": "1D"}
-# Coins tested on daily candles only, fetched each night. They were not used to choose any strategy, so
-# they are a fresh test of what works on BTC and ETH. They are long-lived, which flatters them a little.
-DAILY_COINS = ("SOL", "XRP", "DOGE", "ADA", "LINK", "AVAX", "LTC", "BCH", "DOT", "TRX")
+
 
 
 @dataclass(frozen=True)

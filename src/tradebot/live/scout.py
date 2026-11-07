@@ -44,11 +44,18 @@ def scout_agents() -> list[Agent]:
 
 
 class ScoutTrader(Trader):
-    def __init__(self, settings: Settings, store: Store, public_client: Any, coins: list[str]) -> None:
+    """A paper lane over a list of coins: no venue, state in memory, holds and candles not stored."""
+
+    def __init__(self, settings: Settings, store: Store, public_client: Any, coins: list[str],
+                 timeframe: str = TIMEFRAME, agents: list[Agent] | None = None, component: str = "scout",
+                 lookback_bars: int | None = None) -> None:
         lane = settings.model_copy(deep=True)
         lane.markets.symbols = list(coins)
-        lane.markets.trade_timeframe = TIMEFRAME
-        super().__init__(lane, store, public_client, None, scout_agents())
+        lane.markets.trade_timeframe = timeframe
+        super().__init__(lane, store, public_client, None, agents if agents is not None else scout_agents())
+        if lookback_bars is not None:
+            self.lookback_bars = lookback_bars
+        self.component = component
         self.coins = list(coins)
         self.slot_equity = lane.backtest.initial_equity / SLOTS
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
@@ -118,13 +125,32 @@ class ScoutTrader(Trader):
     def _status(self, report: StepReport) -> None:
         now = pd.Timestamp.now(tz="UTC")
         row: dict[str, Any] = {
-            "component": "scout", "mode": "shadow-only", "last_step_at": now,
+            "component": self.component, "mode": "shadow-only", "last_step_at": now,
             "details": {"coins": self.coins, "decisions": report.decisions},
             "last_error": "; ".join(report.errors) or None,
         }
         if not report.errors:
             row["last_ok_at"] = now
         self.store.upsert("bot_status", [row], on_conflict="component")
+
+
+BASKET_ID = "basket_trend_1d"
+BASKET_LOOKBACK = 90  # daily candles: the 28-day trend and room to spare, one request per coin
+
+
+def basket_trader(settings: Settings, store: Store, public_client: Any) -> ScoutTrader:
+    """The daily trend on a basket of coins, a tenth of the book each. It runs inside the 15-minute
+    step and acts once a day, when a daily candle has closed: a repeated step on the same bar does
+    nothing. Paper only, and a baseline, so it cannot become champion."""
+    from tradebot.data.universe import DAILY_COINS
+    from tradebot.strategies.trend import DailyTrend
+
+    strategy = DailyTrend()
+    strategy.history_bars = 0  # daily candles already: the usual window is enough
+    coins = [f"{c}/USDT:USDT" for c in DAILY_COINS]
+    return ScoutTrader(settings, store, public_client, coins, timeframe="1d",
+                       agents=[Agent(BASKET_ID, "baseline", strategy)], component="basket",
+                       lookback_bars=BASKET_LOOKBACK)
 
 
 def run_scout(trader: ScoutTrader, minutes: float, clock: Callable[[], float] = time.time,

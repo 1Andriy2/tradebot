@@ -227,7 +227,7 @@ def _scenario_events(dfs: dict[str, pd.DataFrame], now: pd.Timestamp) -> list[di
 def _daily_coins(settings: Settings) -> dict[str, pd.DataFrame]:
     """Daily candles of more coins for research. A coin that cannot be fetched is left out."""
     from tradebot.data.history import fetch_ohlcv_range
-    from tradebot.research.lab import DAILY_COINS
+    from tradebot.data.universe import DAILY_COINS
 
     client = make_public_client(settings.venue.exchange_id)
     start = pd.Timestamp(settings.markets.history_start, tz="UTC")
@@ -365,6 +365,14 @@ def cmd_scout(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_basket(settings: Settings, args: argparse.Namespace) -> int:
+    from tradebot.live.scout import basket_trader
+
+    report = basket_trader(settings, _store(args), make_public_client(settings.venue.exchange_id)).step()
+    print(report)
+    return 1 if report.errors else 0
+
+
 def _data_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     p.add_argument("--no-download", action="store_true", help="use cached candles as they are")
@@ -389,6 +397,8 @@ def build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("scout", help="5-minute paper lane on the busiest coins, checked every minute")
     sc.add_argument("--minutes", type=float, default=345, help="how long to run before exiting")
     sc.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
+    bk = sub.add_parser("basket", help="daily trend on a basket of coins, paper only; acts once a day")
+    bk.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     rt = sub.add_parser("retrain", help="walk-forward retraining with champion/challenger promotion")
     _data_flags(rt)
     rl = sub.add_parser("rl-train", help="train the PPO agent and run champion/challenger")
@@ -414,7 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"download": cmd_download, "backtest": cmd_backtest, "step": cmd_step, "daemon": cmd_daemon,
-            "scout": cmd_scout,
+            "scout": cmd_scout, "basket": cmd_basket,
             "retrain": cmd_retrain, "rl-train": cmd_rl_train, "maintenance": cmd_maintenance,
             "reset-kill-switch": cmd_reset_kill_switch, "research": cmd_research, "news": cmd_news}
 

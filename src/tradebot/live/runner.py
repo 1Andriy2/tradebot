@@ -102,6 +102,7 @@ class Trader:
         self.last_price: dict[str, float] = {}
         self._long_history: dict[tuple[str, int], pd.DataFrame] = {}
         self.roster = list(self.agents)
+        self.lookback_bars = LOOKBACK_BARS
         self.news_levels: pd.DataFrame | None = None  # None: unknown this step, not "no news"
         self._targets: dict[tuple[str, str], dict[pd.Timestamp, BarResult]] = {}
         self._feeds: dict[str, Feed] = {}
@@ -180,7 +181,7 @@ class Trader:
 
     def _recent_candles(self, symbol: str) -> pd.DataFrame:
         step_ms = int(self.public.parse_timeframe(self.tf) * 1000)
-        since = int(self.public.milliseconds()) - LOOKBACK_BARS * step_ms
+        since = int(self.public.milliseconds()) - self.lookback_bars * step_ms
         df = fetch_ohlcv_range(self.public, symbol, self.tf, since)
         if len(df) < 50:
             raise RuntimeError(f"too few candles for {symbol}: {len(df)}")
@@ -225,7 +226,7 @@ class Trader:
         if isinstance(agent.strategy, FeedStrategy):
             agent.strategy.feed = self._feed(symbol, agent.strategy.needs)
         need = agent.strategy.history_bars
-        if need <= LOOKBACK_BARS:
+        if need <= self.lookback_bars:
             return agent.strategy.signal(df)
         key = (symbol, need)
         if key not in self._long_history:

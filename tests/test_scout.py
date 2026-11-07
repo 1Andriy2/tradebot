@@ -242,3 +242,42 @@ def test_a_list_picked_under_older_rules_is_picked_again() -> None:
     old = {"picked_at": NOW.isoformat(), "source": "x", "coins": [coin]}
     store.upload(universe.BUCKET, universe.FILE, json.dumps(old).encode())
     assert "USDC/USDT:USDT" not in universe.current(store, Markets(COINS), NOW, counts_answer)
+
+
+class DailyExchange:
+    """Daily candles rising 1% a day for every coin."""
+
+    def __init__(self) -> None:
+        self.now_ms = int(pd.Timestamp("2026-11-07 00:05", tz="UTC").timestamp() * 1000)
+
+    def parse_timeframe(self, _: str) -> int:
+        return 86_400
+
+    def milliseconds(self) -> int:
+        return self.now_ms
+
+    def fetch_ohlcv(self, symbol: str, timeframe: str, since: int, limit: int) -> list[list[float]]:
+        day = 86_400_000
+        start = self.now_ms // day * day - 200 * day
+        rows = [[start + i * day, 100 * 1.01**i, 101 * 1.01**i, 99 * 1.01**i, 100 * 1.01**(i + 1), 1.0]
+                for i in range(201)]
+        return [r for r in rows if since <= r[0] <= self.now_ms][:limit]
+
+
+def test_the_basket_buys_every_rising_coin_once_a_day_with_a_tenth_each() -> None:
+    from tradebot.data.universe import DAILY_COINS
+    from tradebot.live.scout import BASKET_ID, basket_trader
+
+    store, client = MemoryStore(), DailyExchange()
+    first = basket_trader(Settings(), store, client).step()
+    assert first.errors == [] and first.decisions == len(DAILY_COINS)
+    again = basket_trader(Settings(), store, client)
+    assert again.step().decisions == 0  # the same day: nothing to do
+    client.now_ms += 86_400_000
+    bot = basket_trader(Settings(), store, client)
+    bot.step()
+    held = [r for r in bot.rows.values() if r["state"]["book"]["units"] > 0]
+    assert len(held) == len(DAILY_COINS)
+    assert all(r["state"]["book"]["cash"] < 1000.0 for r in held)  # each coin's book is a tenth of 10 000
+    assert {r["agent_id"] for r in store.select("agent_state")} == {BASKET_ID}
+    assert store.select("bot_status", {"component": "basket"})

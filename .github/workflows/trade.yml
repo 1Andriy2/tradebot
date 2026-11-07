@@ -43,3 +43,11 @@ jobs:
           else
             uv run tradebot step
           fi
+      # Paper only, so it gets no exchange keys. It runs even after a failed step: the two are separate.
+      - name: Daily basket
+        if: success() || failure()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EXCHANGE_ID: ${{ vars.EXCHANGE_ID || 'okx' }}
+        run: uv run tradebot basket
