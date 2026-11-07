@@ -229,3 +229,15 @@ def test_a_failed_pick_keeps_the_old_list_or_the_fallback() -> None:
     saved = json.loads(store.download(universe.BUCKET, universe.FILE))
     assert [c["symbol"] for c in saved["coins"]] == good
     assert universe.current(store, Broken(), NOW + pd.Timedelta("8D"), counts_answer) == good
+
+
+def test_coins_pegged_to_the_dollar_are_left_out() -> None:
+    assert "USDC" not in universe.trade_counts([{"symbol": "USDCUSDT", "count": 10**9}])
+    assert universe.trade_counts([{"symbol": "SOLUSDT", "count": 5}]) == {"SOL": 5}
+
+
+def test_a_list_picked_under_older_rules_is_picked_again() -> None:
+    store = MemoryStore()
+    old = {"picked_at": NOW.isoformat(), "source": "x", "coins": [{"symbol": "USDC/USDT:USDT", "activity": 1}]}
+    store.upload(universe.BUCKET, universe.FILE, json.dumps(old).encode())
+    assert "USDC/USDT:USDT" not in universe.current(store, Markets(COINS), NOW, counts_answer)

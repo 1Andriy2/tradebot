@@ -35,6 +35,9 @@ COUNT_SOURCES = {
     "binance_spot": "https://data-api.binance.vision/api/v3/ticker/24hr",
 }
 FALLBACK = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", "DOGE/USDT:USDT"]
+# Busy but flat: a coin pegged to the dollar has nothing for these strategies to trade.
+PEGGED = {"USDC", "USD1", "FDUSD", "TUSD", "DAI", "USDE", "USDS", "PYUSD", "RLUSD", "USDG", "EUR", "EURI"}
+RULES = 2  # raise when the choice changes, so a saved list is picked again instead of waiting a week
 SCALED = re.compile(r"^1000+")  # Binance lists cheap coins as 1000PEPE, OKX as PEPE
 
 Fetch = Callable[[str], Any]
@@ -53,6 +56,8 @@ def trade_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
         symbol = str(row.get("symbol", ""))
         if symbol.endswith(QUOTE) and int(row.get("count") or 0) > 0:
             base = SCALED.sub("", symbol.removesuffix(QUOTE))
+            if base in PEGGED:
+                continue
             counts[base] = max(counts.get(base, 0), int(row["count"]))
     return counts
 
@@ -65,7 +70,8 @@ def venue_swaps(client: Any) -> dict[str, str]:
 
 def by_volume(client: Any, swaps: dict[str, str]) -> dict[str, int]:
     tickers = client.fetch_tickers(list(swaps.values()))
-    return {coin: int(tickers[s].get("quoteVolume") or 0) for coin, s in swaps.items() if s in tickers}
+    return {coin: int(tickers[s].get("quoteVolume") or 0) for coin, s in swaps.items()
+            if s in tickers and coin not in PEGGED}
 
 
 def pick(client: Any, now: pd.Timestamp, fetch: Fetch = fetch_json) -> dict[str, Any]:
@@ -84,7 +90,7 @@ def pick(client: Any, now: pd.Timestamp, fetch: Fetch = fetch_json) -> dict[str,
     if not source:
         counts, source = by_volume(client, swaps), "venue_volume"
     top = sorted(counts, key=lambda c: (-counts[c], c))[:COINS]
-    return {"picked_at": now.isoformat(), "source": source,
+    return {"picked_at": now.isoformat(), "rules": RULES, "source": source,
             "coins": [{"symbol": swaps[c], "activity": counts[c]} for c in top]}
 
 
@@ -100,7 +106,7 @@ def read(store: Store) -> dict[str, Any] | None:
 def current(store: Store, client: Any, now: pd.Timestamp, fetch: Fetch = fetch_json) -> list[str]:
     """The coins to trade. A failed pick keeps the old list rather than stopping the lane."""
     saved = read(store)
-    if saved and now - pd.Timestamp(saved["picked_at"]) < PICK_EVERY:
+    if saved and saved.get("rules") == RULES and now - pd.Timestamp(saved["picked_at"]) < PICK_EVERY:
         return [c["symbol"] for c in saved["coins"]]
     try:
         fresh = pick(client, now, fetch)
