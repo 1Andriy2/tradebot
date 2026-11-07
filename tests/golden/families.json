@@ -83,6 +83,12 @@
   "total_return": 0.0,
   "win_rate": 0.0
  },
+ "trend_1d": {
+  "max_drawdown": 0.03290424,
+  "num_trades": 4.0,
+  "total_return": -0.02593787,
+  "win_rate": 0.0
+ },
  "tsmom": {
   "max_drawdown": 0.0655656,
   "num_trades": 257.0,

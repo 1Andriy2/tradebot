@@ -17,6 +17,7 @@ from tradebot.strategies.baselines import (
 from tradebot.strategies.flows import LiqFade, LiqMagnet, LiqSweep, NewsBalance, NewsEach
 from tradebot.strategies.levels import RareLevel
 from tradebot.strategies.regimes import ChandelierTrend, OnTimeframe, RegimeSwitch, VolScaledTrend
+from tradebot.strategies.trend import DailyTrend
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "chandelier_trend": ChandelierTrend,
     "chandelier_trend_4h": lambda: OnTimeframe(ChandelierTrend(), "4h", CHANDELIER_4H_HISTORY),
     "rare_level": RareLevel,
+    "trend_1d_long": DailyTrend,
 }
 # Strategies that need live data beside the candles. They cannot be backtested on years of history,
 # so they stay out of research and of the nightly baseline records, and trade on paper.

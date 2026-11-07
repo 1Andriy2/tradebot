@@ -206,3 +206,22 @@ def test_flow_agents_wait_when_their_data_is_missing_and_the_rest_trade(monkeypa
     assert report.errors == []
     traded = {r["agent_id"] for r in store.select("agent_state")}
     assert "ma_cross" in traded and not traded & set(FEED_FACTORIES)
+
+
+# Daily trend
+
+def test_the_daily_trend_is_long_after_a_rise_flat_after_a_fall_and_never_early() -> None:
+    from tradebot.strategies.trend import DailyTrend
+
+    days = 60
+    close = np.r_[np.linspace(100, 130, 96 * days // 2), np.linspace(130, 90, 96 * days // 2)]
+    df = make_ohlcv(close, freq="15min")
+    sig = DailyTrend(n=10).signal(df)
+    assert sig.iloc[96 * 25] == 1.0
+    assert sig.iloc[-1] == 0.0
+    both = DailyTrend(n=10, long_only=False).signal(df)
+    assert both.iloc[-1] == -1.0
+    # A change on the last day cannot move any bar before that day is complete.
+    later = df.copy()
+    later.iloc[-10:, :4] = 1000.0
+    assert DailyTrend(n=10).signal(later).iloc[:-96].equals(sig.iloc[:-96])

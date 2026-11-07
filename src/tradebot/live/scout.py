@@ -35,7 +35,7 @@ POLL_SECONDS = 60
 CLOSE_DELAY = 5  # the exchange needs a moment to publish a closed candle
 SLOTS = 10  # a book's size stays the same however many coins the list holds this week
 # A 4-hour strategy is not a 5-minute one, and a 30-day window is 8640 bars here, fetched for each coin.
-SKIPPED = ("chandelier_trend_4h", "rare_level")
+SKIPPED = ("chandelier_trend_4h", "rare_level", "trend_1d_long")
 
 
 def scout_agents() -> list[Agent]:
