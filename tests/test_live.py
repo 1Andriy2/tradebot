@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tradebot.agents import Agent
+from tradebot.agents import NO_CHAMPION, Agent
 from tradebot.config import Settings
 from tradebot.exchange.venue import Fill
 from tradebot.live.runner import LOOKBACK_BARS, Trader, seconds_until_next_bar
@@ -383,3 +383,20 @@ def test_manual_kill_switch_reset_reenables_trading() -> None:
     public.add_bar(100.0)
     trader.step()
     assert venue.units["BTC/USDT:USDT"] > 0
+
+
+def test_with_no_champion_the_account_closes_and_nobody_trades_it() -> None:
+    public, venue = FakePublic(), FakeVenue()
+    trader, store = make_trader(venue, public)
+    trader.step()
+    assert venue.units["BTC/USDT:USDT"] > 0
+    store.upsert("champion", [{"id": 1, "agent_id": NO_CHAMPION}], on_conflict="id")
+    public.add_bar(100.0)
+    report = trader.step()
+    assert not report.errors and report.orders == 1
+    assert venue.units["BTC/USDT:USDT"] == 0
+    assert venue.orders[-1]["reduce_only"] is True
+    held = store.select("positions", {"venue": "demo"})
+    assert all(r["units"] == 0 for r in held)
+    public.add_bar(100.0)
+    assert trader.step().orders == 0

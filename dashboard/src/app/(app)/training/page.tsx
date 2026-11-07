@@ -36,6 +36,7 @@ function verdict(v: ModelVersionRow): string {
   if (v.status === "retired") return "Її замінила краща версія";
   const m = v.metrics;
   const reasons = [];
+  if (!(m.total_return > 0 && m.score > 0)) reasons.push(`у мінусі на перевірці (${fmtSignedPct(m.total_return)})`);
   if (!(m.score > m.champion_score + MARGIN)) reasons.push(`Sortino ${fmtNum(m.score)} не кращий за чемпіона (${fmtNum(m.champion_score)})`);
   if (!(m.num_trades >= MIN_TRADES)) reasons.push(`лише ${m.num_trades} угод`);
   if (!(m.max_drawdown < MAX_DRAWDOWN)) reasons.push(`просідання ${fmtPct(m.max_drawdown, 1)}`);

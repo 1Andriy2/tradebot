@@ -82,3 +82,16 @@ def test_research_run_produces_oos_results() -> None:
         assert 0 <= m["dsr"] <= 1 and 0 <= m["fold_win_rate"] <= 1
         assert m["n_folds"] >= 3 and len(r["params"]["folds"]) >= 3
         assert np.isfinite(m["total_return"])
+
+
+def test_daily_coins_join_the_run_as_daily_tasks() -> None:
+    from tradebot.research.lab import to_timeframe
+
+    dfs = {"BTC/USDT:USDT": synthetic(96 * 330, 11)}
+    other = to_timeframe(synthetic(96 * 330, 12), "1d")
+    cfg = ResearchConfig(timeframes=("1d",), families=("ma_cross",), first_test="2022-05-01",
+                         train_months=3, test_months=2, workers=1, robustness=False)
+    _, results = run_research(dfs, {"BTC/USDT:USDT": None}, CostsConfig(), RiskParams(), cfg,
+                              {"SOL/USDT:USDT": other})
+    found = {(r["symbol"], r["timeframe"]) for r in results}
+    assert found == {("BTC/USDT:USDT", "1d"), ("SOL/USDT:USDT", "1d")}

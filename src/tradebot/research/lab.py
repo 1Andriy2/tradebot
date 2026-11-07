@@ -42,12 +42,15 @@ from tradebot.strategies.library import FAMILIES, make
 log = logging.getLogger(__name__)
 
 EULER_GAMMA = 0.5772156649
-TF_RULES = {"15m": None, "1h": "1h", "4h": "4h"}
+TF_RULES = {"15m": None, "1h": "1h", "4h": "4h", "1d": "1D"}
+# Coins tested on daily candles only, fetched each night. They were not used to choose any strategy, so
+# they are a fresh test of what works on BTC and ETH. They are long-lived, which flatters them a little.
+DAILY_COINS = ("SOL", "XRP", "DOGE", "ADA", "LINK", "AVAX", "LTC", "BCH", "DOT", "TRX")
 
 
 @dataclass(frozen=True)
 class ResearchConfig:
-    timeframes: tuple[str, ...] = ("15m", "1h", "4h")
+    timeframes: tuple[str, ...] = ("15m", "1h", "4h", "1d")
     families: tuple[str, ...] = tuple(FAMILIES)
     first_test: str = "2022-01-01"
     train_months: int = 12
@@ -275,10 +278,12 @@ def _add_run_level_robustness(results: list[dict[str, Any]]) -> None:
 
 def run_research(
     dfs15: dict[str, pd.DataFrame], funding: dict[str, pd.Series | None], costs: CostsConfig,
-    risk: RiskParams, cfg: ResearchConfig | None = None,
+    risk: RiskParams, cfg: ResearchConfig | None = None, daily: dict[str, pd.DataFrame] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
+    """``daily`` holds more coins as daily candles. Their funding is not known, so it is not charged."""
     cfg = cfg or ResearchConfig()
     frames = {(s, tf): to_timeframe(df, tf) for s, df in dfs15.items() for tf in cfg.timeframes}
+    frames |= {(s, "1d"): df for s, df in (daily or {}).items()}
     tasks = [Task(fam, s, tf, frames[(s, tf)], funding.get(s), cfg, costs, risk)
              for fam in cfg.families for (s, tf) in frames]
     if cfg.workers > 1:

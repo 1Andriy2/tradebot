@@ -59,6 +59,7 @@ FEED_FACTORIES: dict[str, Callable[[], Strategy]] = {
 }
 
 DEFAULT_CHAMPION = "ma_cross"
+NO_CHAMPION = "none"  # nobody passes the promotion rules: the demo account holds nothing
 # Agents that get a news twin. Models can become champion, and a twin that came and went with the
 # title would be left holding a position. The rest are steady: a mostly flat agent shows the filter
 # nothing, while buy_hold is always long and ma_cross goes short as well.

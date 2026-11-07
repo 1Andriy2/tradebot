@@ -24,6 +24,7 @@ from tradebot.agents import (
     DEFAULT_CHAMPION,
     NEWS_REFERENCES,
     NEWS_TWIN_KINDS,
+    NO_CHAMPION,
     Agent,
     all_agents,
     news_twin,
@@ -145,6 +146,8 @@ class Trader:
                 except Exception as exc:
                     self._error(report, f"{agent.id}/{symbol}: {exc!r}", agent.id)
         self._snapshot_equity()
+        if self.venue is not None and champion == NO_CHAMPION:
+            report.orders += self._close_unowned(report)
         if self.venue is not None:
             try:
                 self._retire_former_champions(champion)
@@ -249,6 +252,21 @@ class Trader:
             "avg_entry": book.avg_entry or None, "stop_loss": state.sl, "take_profit": state.tp,
             "updated_at": pd.Timestamp.now(tz="UTC"),
         }], on_conflict="agent_id,venue,symbol")
+
+    def _close_unowned(self, report: StepReport) -> int:
+        """With no champion, nobody owns the account's positions, so they are closed at market."""
+        assert self.venue is not None
+        orders = 0
+        for symbol in self.symbols:
+            try:
+                units = self.venue.position_units(symbol)
+                if abs(units) > EPS:
+                    fill = self.venue.market_order(symbol, -units, True, self.last_price.get(symbol, 0.0))
+                    orders += fill is not None
+                    self._event("info", f"{symbol}: no champion, position closed", {"units": units})
+            except Exception as exc:
+                self._error(report, f"closing {symbol} without a champion: {exc!r}")
+        return orders
 
     def _retire_former_champions(self, champion: str) -> None:
         """The account holds one position per symbol, and it belongs to the champion. A former champion

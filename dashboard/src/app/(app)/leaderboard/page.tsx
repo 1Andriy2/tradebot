@@ -9,6 +9,22 @@ import { useNow } from "@/lib/useNow";
 import { useRows } from "@/lib/useRows";
 
 const MIN_TRADES = 30; // the same number the promotion rule asks for
+const MIN_DAYS = 14;
+
+/** Can anything be said yet? A result counts only when it is far from zero for its own noise: the
+ *  spread of a sum of trades grows with the square root of their number. Trade results are not
+ *  stored one by one, so their spread is estimated from the average size of a win or a loss. */
+function verdict(s: { trades: number; gross_win: number; gross_loss: number; started_at: string }, now: number):
+  { label: string; tone: "grey" | "green" | "red" } {
+  const days = (now - new Date(s.started_at).getTime()) / 86_400_000;
+  if (s.trades < MIN_TRADES) return { label: `мало угод: ${s.trades} з ${MIN_TRADES}`, tone: "grey" };
+  if (days < MIN_DAYS) return { label: `мало часу: ${Math.floor(days)} з ${MIN_DAYS} дн`, tone: "grey" };
+  const net = s.gross_win - s.gross_loss;
+  const spread = 1.25 * ((s.gross_win + s.gross_loss) / s.trades) * Math.sqrt(s.trades);
+  if (net > 2 * spread) return { label: "заробляє", tone: "green" };
+  if (net < -2 * spread) return { label: "втрачає", tone: "red" };
+  return { label: "не відрізняється від нуля", tone: "grey" };
+}
 
 const LIVE_HEAD = [
   "#", "Агент",
@@ -19,6 +35,7 @@ const LIVE_HEAD = [
   { label: "Угод", right: true, hint: `Закриті угоди. Менше ${MIN_TRADES} угод ще нічого не доводять.` },
   { label: "Успішних", right: true, hint: "Частка прибуткових угод." },
   { label: "Profit factor", right: true, hint: "Сума прибутків, поділена на суму збитків. Вище 1 означає, що стратегія заробляє." },
+  { label: "Висновок", hint: `Чи вже можна щось сказати. Потрібно щонайменше ${MIN_TRADES} угод і ${MIN_DAYS} днів, а результат має бути далеко від нуля з огляду на розкид угод. Інакше місце в таблиці вирішує випадок.` },
   "Зараз",
 ];
 
@@ -107,6 +124,7 @@ export default function LeaderboardPage() {
                     <td className="text-right">
                       {s.gross_loss > 0 ? fmtNum(s.gross_win / s.gross_loss) : s.gross_win > 0 ? "∞" : "—"}
                     </td>
+                    <td>{now ? (() => { const v = verdict(s, now); return <Badge tone={v.tone}>{v.label}</Badge>; })() : "—"}</td>
                     <td className="text-xs text-slate-500 dark:text-slate-400">{holding(s.agent_id).join(", ") || "поза ринком"}</td>
                   </tr>
                 );

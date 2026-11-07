@@ -224,6 +224,29 @@ def _scenario_events(dfs: dict[str, pd.DataFrame], now: pd.Timestamp) -> list[di
     return rows
 
 
+def _daily_coins(settings: Settings) -> dict[str, pd.DataFrame]:
+    """Daily candles of more coins for research. A coin that cannot be fetched is left out."""
+    from tradebot.data.history import fetch_ohlcv_range
+    from tradebot.research.lab import DAILY_COINS
+
+    client = make_public_client(settings.venue.exchange_id)
+    start = pd.Timestamp(settings.markets.history_start, tz="UTC")
+    out = {}
+    for coin in DAILY_COINS:
+        symbol = f"{coin}/USDT:USDT"
+        # The exchange answers nothing for days before a listing, so later starts are tried in turn.
+        for since in pd.date_range(start, pd.Timestamp.now(tz="UTC") - pd.Timedelta("400D"), freq="180D"):
+            try:
+                df = fetch_ohlcv_range(client, symbol, "1d", int(since.timestamp() * 1000))
+            except Exception as exc:
+                log.warning("no daily candles for %s: %s", symbol, type(exc).__name__)
+                break
+            if len(df):
+                out[symbol] = df
+                break
+    return out
+
+
 def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     from tradebot.data.funding import load_funding
     from tradebot.research.lab import ResearchConfig, run_research
@@ -236,7 +259,7 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
     cfg = ResearchConfig(workers=args.workers, initial_equity=settings.backtest.initial_equity)
     if args.families:
         cfg = dataclasses.replace(cfg, families=tuple(args.families))
-    run_id, results = run_research(dfs, funding, settings.costs, settings.risk, cfg)
+    run_id, results = run_research(dfs, funding, settings.costs, settings.risk, cfg, _daily_coins(settings))
     now = pd.Timestamp.now(tz="UTC")
     store.insert("research_results", [{"run_id": run_id, "created_at": now, **r} for r in results])
     patterns = []

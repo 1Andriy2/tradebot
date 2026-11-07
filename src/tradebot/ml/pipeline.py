@@ -66,7 +66,7 @@ def retrain(
         champ_signals = model_signals(champ_probs, champ_cfg)
     champ_id, champion = registry.evaluate_champion(settings, store, dfs, wf, ho_start, champ_signals)
 
-    registry.record_baselines(store, settings, dfs, wf, ho_start, end)
+    baselines = registry.record_baselines(store, settings, dfs, wf, ho_start, end)
 
     # Final model for live trading: refit on the most recent training window.
     recent = {s: df[df.index >= end - pd.DateOffset(months=wf.train_months)] for s, df in dfs.items()}
@@ -80,7 +80,10 @@ def retrain(
         challenger=challenger, champion=champion, champ_id=champ_id, holdout=(ho_start, end),
         train_range=(x.index.min(), x.index.max()), min_trades=wf.min_trades,
     )
-    registry.trainer_status(store, "nightly", {"agent": AGENT_ID, "version": version, "promoted": promoted})
+    holder, holding = (AGENT_ID, challenger) if promoted else (champ_id, champion)
+    chosen = registry.choose_champion(store, baselines, holder, holding, wf.min_trades)
+    registry.trainer_status(store, "nightly", {"agent": AGENT_ID, "version": version, "promoted": promoted,
+                                               "champion": chosen})
     return RetrainResult(version, promoted, challenger, champion, champ_id)
 
 

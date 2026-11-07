@@ -1478,3 +1478,39 @@ def test_general_history_is_marked_done_only_when_every_topic_answered() -> None
     assert not pipeline.history_done(store)
     pipeline.mark_history(store, {"history_fed": 5, "history_sec": 0}, NOW)
     assert pipeline.history_done(store)
+
+
+# Levels against the usual
+
+def steady_bad_news(hours: int, now: pd.Timestamp) -> pd.DataFrame:
+    """One fairly bad official story every hour, at half past, as on a normal gloomy day."""
+    rows = [{"first_seen": now - pd.Timedelta(hours=h + 0.5), "published": now - pd.Timedelta(hours=h + 0.5),
+             "kind": "official", "impact": -0.6, "confidence": 0.9, "assets": "BTC", "title": f"t{h}",
+             "source": f"s{h % 5}", "cluster": f"c{h}", "status": "scored"} for h in range(hours)]
+    return pd.DataFrame(rows)
+
+
+def btc(rows: pd.DataFrame, now: pd.Timestamp) -> dict[str, Any]:
+    return next(r for r in risk.assess(rows, now, False) if r["scope"] == "BTC")
+
+
+def test_an_ordinary_gloomy_day_is_traded_in_full() -> None:
+    level = btc(steady_bad_news(80, NOW), NOW)
+    assert level["level"] == risk.TRADE and level["negative"] < risk.REDUCE_AT
+    assert abs(level["net"]) < 0.5
+
+
+def test_bad_news_well_above_the_usual_still_cuts() -> None:
+    ago = NOW - pd.Timedelta("10min")
+    burst = pd.DataFrame([{"first_seen": ago, "published": ago, "kind": "official", "impact": -1.0,
+                           "confidence": 1.0, "assets": "BTC", "title": f"crash {i}", "source": f"x{i}",
+                           "cluster": f"b{i}", "status": "scored"}
+                          for i in range(3)])
+    level = btc(pd.concat([steady_bad_news(80, NOW), burst], ignore_index=True), NOW)
+    assert level["level"] == risk.STAND_ASIDE and level["long_mult"] == 0.0 and level["short_mult"] == 1.0
+    assert level["net"] < -1.0
+
+
+def test_without_history_the_usual_is_zero() -> None:
+    now = NOW
+    assert risk.usual(steady_bad_news(10, now).assign(born=lambda d: d["first_seen"]), now) == 0.0

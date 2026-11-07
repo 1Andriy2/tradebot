@@ -1,8 +1,10 @@
 """Model registry and champion/challenger promotion, shared by the ML and RL pipelines.
 
-Every trained version is stored (params, metrics, model file in Supabase Storage). A version
-becomes the champion only if it beats the current champion's holdout Sortino by a margin,
-trades enough, and stays below the kill-switch drawdown on the holdout.
+Every trained version is stored (params, metrics, model file in Supabase Storage). Any agent that can
+be tested on the holdout may become the champion, which alone trades the demo account. It must make
+money there (return and Sortino above zero), trade enough, stay below the kill-switch drawdown, and
+beat a champion that does all that by a margin. A champion that no longer makes money on the holdout
+steps down even with nobody to replace it: then the demo account closes its positions and waits.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from typing import Any
 
 import pandas as pd
 
-from tradebot.agents import BASELINE_FACTORIES, DEFAULT_CHAMPION, Agent
+from tradebot.agents import BASELINE_FACTORIES, DEFAULT_CHAMPION, NO_CHAMPION, Agent
 from tradebot.config import RiskParams, Settings
 from tradebot.ml.walkforward import WalkForwardConfig, evaluate
 from tradebot.store import Store
@@ -23,6 +25,7 @@ BUCKET = "models"
 PROMOTION_MARGIN = 0.05
 MAX_HOLDOUT_DD = 0.20
 MODEL_AGENTS = ("lgbm", "rl")
+FLAT = {"score": 0.0, "total_return": 0.0, "num_trades": 0.0, "max_drawdown": 0.0, "per_symbol": {}}
 
 
 def versions(store: Store, agent_id: str) -> list[dict[str, Any]]:
@@ -95,6 +98,8 @@ def evaluate_champion(
     configuration (a stored final model was trained on recent data, so replaying it on the
     holdout would leak)."""
     cid = champion_id(store)
+    if cid == NO_CHAMPION:
+        return cid, dict(FLAT)
     if cid == "lgbm" and lgbm_signals is not None:
         row = champion_version(store, "lgbm")
         risk = RiskParams(**row["params"]["risk"]) if row else settings.risk
@@ -109,16 +114,28 @@ def evaluate_champion(
     return cid, evaluate(dfs, {s: strat for s in dfs}, settings.risk, settings.costs, wf, start)
 
 
-def rejection_reasons(challenger: dict[str, Any], champion: dict[str, Any], min_trades: int) -> list[str]:
-    """Every promotion rule the challenger fails; empty means it may become the champion."""
+def failures(metrics: dict[str, Any], min_trades: int) -> list[str]:
+    """The rules that do not depend on the champion: what any champion must do on the holdout."""
     reasons = []
-    if not challenger["score"] > champion["score"] + PROMOTION_MARGIN:
+    if not (metrics["total_return"] > 0 and metrics["score"] > 0):
+        reasons.append(f"loses on the holdout: return {metrics['total_return']:+.1%}, "
+                       f"sortino {metrics['score']:.2f}")
+    if not metrics["num_trades"] >= min_trades:
+        reasons.append(f"trades {metrics['num_trades']:.0f} below minimum {min_trades}")
+    if not metrics["max_drawdown"] < MAX_HOLDOUT_DD:
+        reasons.append(f"max drawdown {metrics['max_drawdown']:.1%} not below {MAX_HOLDOUT_DD:.0%}")
+    return reasons
+
+
+def rejection_reasons(challenger: dict[str, Any], champion: dict[str, Any], min_trades: int) -> list[str]:
+    """Every promotion rule the challenger fails; empty means it may become the champion. A champion
+    that fails the rules itself is no bar: then making money on the holdout is enough."""
+    reasons = []
+    beaten = challenger["score"] > champion["score"] + PROMOTION_MARGIN
+    if not failures(champion, min_trades) and not beaten:
         reasons.append(f"sortino {challenger['score']:.2f} not above champion "
                        f"{champion['score']:.2f} + {PROMOTION_MARGIN}")
-    if not challenger["num_trades"] >= min_trades:
-        reasons.append(f"trades {challenger['num_trades']:.0f} below minimum {min_trades}")
-    if not challenger["max_drawdown"] < MAX_HOLDOUT_DD:
-        reasons.append(f"max drawdown {challenger['max_drawdown']:.1%} not below {MAX_HOLDOUT_DD:.0%}")
+    reasons += failures(challenger, min_trades)
     return reasons
 
 
@@ -179,15 +196,51 @@ def record_version(
 
 
 def record_baselines(store: Store, settings: Settings, dfs: dict[str, pd.DataFrame],
-                     wf: WalkForwardConfig, start: pd.Timestamp, end: pd.Timestamp) -> None:
-    rows = []
+                     wf: WalkForwardConfig, start: pd.Timestamp, end: pd.Timestamp,
+                     ) -> dict[str, dict[str, Any]]:
+    """Holdout results of every fixed strategy, stored for the page and returned for the choice."""
+    rows, results = [], {}
     for agent_id, make in BASELINE_FACTORIES.items():
         strat = make()
         r = evaluate(dfs, {s: strat for s in dfs}, settings.risk, settings.costs, wf, start)
+        results[agent_id] = r
         rows += [{"agent_id": agent_id, "label": strat.label, "symbol": s,
                   "timeframe": settings.markets.trade_timeframe, "period_start": start,
                   "period_end": end, "metrics": m} for s, m in r["per_symbol"].items()]
     store.insert("backtest_results", rows)
+    return results
+
+
+def set_champion(store: Store, agent_id: str, was: str, reason: str) -> None:
+    """Hand the demo account to a fixed strategy, or to nobody. A model's champion version retires."""
+    now = pd.Timestamp.now(tz="UTC")
+    for aid in MODEL_AGENTS:
+        old = champion_version(store, aid)
+        if old is not None:
+            store.upsert("model_versions", [{"agent_id": aid, "version": old["version"],
+                                             "status": "retired"}], on_conflict="agent_id,version")
+    store.upsert("champion", [{"id": 1, "agent_id": agent_id, "version_id": None, "since": now}],
+                 on_conflict="id")
+    store.insert("events", [{"ts": now, "type": "champion_change", "agent_id": agent_id,
+                             "message": f"New champion: {agent_id} (was {was}): {reason}", "details": {}}])
+
+
+def choose_champion(store: Store, results: dict[str, dict[str, Any]], champ_id: str,
+                    champion: dict[str, Any], min_trades: int) -> str:
+    """After the night's holdout tests: the best fixed strategy that passes the rules takes over. If
+    none does and the champion itself loses on the holdout, nobody trades the demo account."""
+    passing = {a: m for a, m in results.items()
+               if a != champ_id and not rejection_reasons(m, champion, min_trades)}
+    if passing:
+        best = max(passing, key=lambda a: passing[a]["score"])
+        m = passing[best]
+        why = f"holdout return {m['total_return']:+.1%}, sortino {m['score']:.2f}"
+        set_champion(store, best, champ_id, why)
+        return best
+    if champ_id != NO_CHAMPION and failures(champion, min_trades):
+        set_champion(store, NO_CHAMPION, champ_id, "; ".join(failures(champion, min_trades)))
+        return NO_CHAMPION
+    return champ_id
 
 
 def trainer_status(store: Store, mode: str, details: dict[str, Any], error: str | None = None) -> None:
