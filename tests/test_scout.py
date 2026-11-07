@@ -238,6 +238,7 @@ def test_coins_pegged_to_the_dollar_are_left_out() -> None:
 
 def test_a_list_picked_under_older_rules_is_picked_again() -> None:
     store = MemoryStore()
-    old = {"picked_at": NOW.isoformat(), "source": "x", "coins": [{"symbol": "USDC/USDT:USDT", "activity": 1}]}
+    coin = {"symbol": "USDC/USDT:USDT", "activity": 1}
+    old = {"picked_at": NOW.isoformat(), "source": "x", "coins": [coin]}
     store.upload(universe.BUCKET, universe.FILE, json.dumps(old).encode())
     assert "USDC/USDT:USDT" not in universe.current(store, Markets(COINS), NOW, counts_answer)
