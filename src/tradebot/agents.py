@@ -14,6 +14,8 @@ from tradebot.strategies.baselines import (
     MACrossover,
     RSIMeanReversion,
 )
+from tradebot.strategies.flows import LiqFade, LiqMagnet, LiqSweep, NewsBalance, NewsEach
+from tradebot.strategies.levels import RareLevel
 from tradebot.strategies.regimes import ChandelierTrend, OnTimeframe, RegimeSwitch, VolScaledTrend
 
 
@@ -42,6 +44,16 @@ BASELINE_FACTORIES: dict[str, Callable[[], Strategy]] = {
     "vol_scaled_trend": VolScaledTrend,
     "chandelier_trend": ChandelierTrend,
     "chandelier_trend_4h": lambda: OnTimeframe(ChandelierTrend(), "4h", CHANDELIER_4H_HISTORY),
+    "rare_level": RareLevel,
+}
+# Strategies that need live data beside the candles. They cannot be backtested on years of history,
+# so they stay out of research and of the nightly baseline records, and trade on paper.
+FEED_FACTORIES: dict[str, Callable[[], Strategy]] = {
+    "newsflow_each": NewsEach,
+    "newsflow_balance": NewsBalance,
+    "liq_fade": LiqFade,
+    "liq_sweep": LiqSweep,
+    "liq_magnet": LiqMagnet,
 }
 
 DEFAULT_CHAMPION = "ma_cross"
@@ -59,4 +71,5 @@ def news_twin(agent: Agent) -> Agent:
 
 
 def all_agents() -> list[Agent]:
-    return [Agent(agent_id, "baseline", make()) for agent_id, make in BASELINE_FACTORIES.items()]
+    factories = {**BASELINE_FACTORIES, **FEED_FACTORIES}
+    return [Agent(agent_id, "baseline", make()) for agent_id, make in factories.items()]

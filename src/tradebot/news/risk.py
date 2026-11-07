@@ -62,6 +62,30 @@ def _covers(assets: str, wanted: set[str]) -> bool:
     return bool(wanted & set(assets.split(",")))
 
 
+FRESH = pd.Timedelta("20min")  # one news run: a story first seen in it is new to the bot
+
+
+def story_weights(events: pd.DataFrame, now: pd.Timestamp) -> pd.Series:
+    """Signed weight of each story: impact x confidence x source kind, halved every few hours. A
+    story repeated by many outlets counts once, at its strongest."""
+    if events.empty:
+        return pd.Series(dtype=float)
+    hours = (now - events["born"]).dt.total_seconds() / 3600
+    weight = (events["impact"] * events["confidence"] * events["kind"].map(KIND_WEIGHT).fillna(0.5)
+              * 0.5 ** (hours / HALF_LIFE_HOURS))
+    strongest = weight.abs().groupby(events["cluster"]).idxmax()
+    return pd.Series(weight.loc[strongest].to_numpy(), index=strongest.index)
+
+
+def news_flow(events: pd.DataFrame, now: pd.Timestamp) -> tuple[float, float]:
+    """The balance of recent stories, good minus bad, and the strongest story new this run. Unlike the
+    pressures, the balance does not saturate: ten bad stories outweigh one good one."""
+    net = float(story_weights(events, now).sum())
+    new = events[events["first_seen"] > now - FRESH]
+    fresh = story_weights(new.assign(born=new["first_seen"]), now) if len(new) else pd.Series(dtype=float)
+    return net, float(fresh.iloc[int(np.argmax(fresh.abs().to_numpy()))]) if len(fresh) else 0.0
+
+
 def assess_scope(scope: str, events: pd.DataFrame, now: pd.Timestamp, stale: bool) -> dict[str, Any]:
     """``stale`` only marks that scoring is behind. Stories already rated are still true, so a level
     stays in force: dropping a cut in the middle of a big event would be the worst moment for it."""
@@ -70,6 +94,7 @@ def assess_scope(scope: str, events: pd.DataFrame, now: pd.Timestamp, stale: boo
     negative, bad_sources = side_pressure(bad, now)
     positive, good_sources = side_pressure(good, now)
     long_mult, short_mult = multiplier(negative, bad_sources), multiplier(positive, good_sources)
+    net, fresh = news_flow(mine, now)
     worst = min(long_mult, short_mult)
     level = TRADE if worst == 1.0 else STAND_ASIDE if worst == 0.0 else REDUCE
     strongest = mine.reindex(mine["impact"].abs().sort_values(ascending=False).index)
@@ -77,7 +102,8 @@ def assess_scope(scope: str, events: pd.DataFrame, now: pd.Timestamp, stale: boo
     headlines = [f"{i:+.2f} {t[:120]}" for i, t in zip(top["impact"], top["title"], strict=True)]
     return {"ts": now, "scope": scope, "level": level, "long_mult": long_mult, "short_mult": short_mult,
             "negative": negative, "positive": positive, "events": len(mine),
-            "sources": int(mine["source"].nunique()), "stale": stale, "top": " | ".join(headlines)}
+            "sources": int(mine["source"].nunique()), "stale": stale, "net": net, "fresh": fresh,
+            "top": " | ".join(headlines)}
 
 
 def assess(scored: pd.DataFrame, now: pd.Timestamp, stale: bool) -> list[dict[str, Any]]:

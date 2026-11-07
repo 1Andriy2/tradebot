@@ -34,6 +34,8 @@ Server mode (`docker-compose.yml`) runs the same code as `tradebot daemon` + a n
 | `strategies/` | Strategy interface (target exposure in [-1, 1]) and 5 baselines. |
 | `live/scout.py` | 5-minute paper lane on the busiest coins, one long job, no exchange keys. |
 | `data/universe.py` | Weekly list of the 10 coins with the most trades in 24 hours. |
+| `data/feeds.py`, `strategies/flows.py` | Live liquidations, open interest and news balance for the flow strategies; estimated liquidation map. |
+| `strategies/levels.py` | Levels the price seldom reaches. |
 | `risk.py` | Hard caps + `RiskManager` (sizing, ATR stops, daily loss limit, kill switch). |
 | `policy.py`, `simulate.py`, `paper.py` | Shared decision rules, one-bar simulation, paper account. |
 | `backtest/engine.py` | Backtester built on `simulate.step_bar` (next-open fills, fees, slippage). |

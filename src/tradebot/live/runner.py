@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,7 @@ from tradebot.agents import (
     news_twin,
 )
 from tradebot.config import Settings
+from tradebot.data.feeds import Feed, FeedMissing, liquidation_bars, open_interest
 from tradebot.data.history import fetch_ohlcv_range
 from tradebot.exchange.venue import Venue
 from tradebot.news.gate import exposure_scale, load_levels
@@ -36,6 +38,7 @@ from tradebot.policy import DecisionPolicy, PolicyState
 from tradebot.risk import RiskManager
 from tradebot.simulate import Bar, step_bar
 from tradebot.store import Store
+from tradebot.strategies.flows import FeedStrategy
 
 log = logging.getLogger(__name__)
 
@@ -100,12 +103,16 @@ class Trader:
         self.roster = list(self.agents)
         self.news_levels: pd.DataFrame | None = None  # None: unknown this step, not "no news"
         self._targets: dict[tuple[str, str], dict[pd.Timestamp, BarResult]] = {}
+        self._feeds: dict[str, Feed] = {}
+        self._feed_failed: set[tuple[str, str]] = set()
 
     # ---------- public API ----------
 
     def step(self) -> StepReport:
         report = StepReport()
         self._long_history.clear()
+        self._feeds.clear()
+        self._feed_failed.clear()
         champion = self._champion_id()
         self._prepare_news_twins()
         self.store.upsert("agents", [
@@ -127,7 +134,11 @@ class Trader:
                     if agent.news_gated:  # after its original, whose position it follows
                         report.decisions += self._advance_twin(agent, symbol, df)
                         continue
-                    signal = self._signal(agent, symbol, df)
+                    try:
+                        signal = self._signal(agent, symbol, df)
+                    except FeedMissing as exc:  # it waits; missed bars are replayed next step
+                        log.warning("%s/%s waits for its data: %s", agent.id, symbol, exc)
+                        continue
                     report.decisions += self._advance_shadow(agent, symbol, df, signal, atr)
                     if self.venue is not None and agent.id == champion:
                         report.orders += self._trade_demo(agent, symbol, df, signal, atr)
@@ -181,8 +192,35 @@ class Trader:
             for r in tail.itertuples()
         ], on_conflict="symbol,timeframe,ts")
 
+    def _feed(self, symbol: str, needs: tuple[str, ...]) -> Feed:
+        """Live data for this symbol, read once a step. A source that failed is not tried again
+        until the next step, and the agents that need it wait."""
+        feed = self._feeds.setdefault(symbol, Feed())
+        loaders: dict[str, Callable[[], Any]] = {
+            "liquidations": lambda: liquidation_bars(self.public, symbol, self.tf),
+            "open_interest": lambda: open_interest(self.public, symbol),
+        }
+        for need in needs:
+            if (symbol, need) in self._feed_failed:
+                raise FeedMissing(need)
+            if need == "news":
+                if self.news_levels is None:
+                    raise FeedMissing("news levels could not be read")
+                levels = self.news_levels
+                feed.news = levels[levels["scope"] == symbol.split("/")[0]].sort_values("ts") \
+                    if len(levels) else pd.DataFrame()
+            elif getattr(feed, need) is None:
+                try:
+                    setattr(feed, need, loaders[need]())
+                except Exception as exc:
+                    self._feed_failed.add((symbol, need))
+                    raise FeedMissing(f"{need}: {type(exc).__name__}") from exc
+        return feed
+
     def _signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
         """The agent's signal on the step's bars, from a longer history if it needs one."""
+        if isinstance(agent.strategy, FeedStrategy):
+            agent.strategy.feed = self._feed(symbol, agent.strategy.needs)
         need = agent.strategy.history_bars
         if need <= LOOKBACK_BARS:
             return agent.strategy.signal(df)

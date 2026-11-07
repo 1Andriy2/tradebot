@@ -19,6 +19,7 @@ from tradebot.strategies.baselines import (
     MACrossover,
     RSIMeanReversion,
 )
+from tradebot.strategies.levels import RareLevel
 from tradebot.strategies.regimes import ChandelierTrend, RegimeSwitch, VolScaledTrend
 
 
@@ -162,6 +163,7 @@ FAMILIES: dict[str, tuple[Callable[..., Strategy], ParamGrid]] = {
     "analog": (AnalogForecast, [{"k": k, "horizon": h} for k in (50, 200) for h in (16, 64)]),
     "chandelier_trend": (ChandelierTrend, [{"mult": m, "max_hold": h}
                                            for m in (2.5, 3.0) for h in (96, 288)]),
+    "rare_level": (RareLevel, [{"window": w, "rare": r} for w in (2880, 5760) for r in (0.02, 0.01)]),
 }
 
 

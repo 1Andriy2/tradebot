@@ -59,6 +59,12 @@
   "total_return": -0.0673395,
   "win_rate": 0.29130435
  },
+ "rare_level": {
+  "max_drawdown": 0.0,
+  "num_trades": 0.0,
+  "total_return": 0.0,
+  "win_rate": 0.0
+ },
  "regime_switch": {
   "max_drawdown": 0.03313376,
   "num_trades": 131.0,
