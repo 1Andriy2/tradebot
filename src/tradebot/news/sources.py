@@ -36,10 +36,17 @@ OFFICIAL, NEWS, SOCIAL, GEO, MARKET, WATCH = "official", "news", "social", "geo"
 MAX_DOWNLOAD = 30_000_000  # a GDELT file is about 8 MB
 MAX_UNZIPPED = 200_000_000
 COLLECT_SECONDS = 120  # the job gets 10 minutes: leave room to score and save what was found
-ASSET_SOURCES = ("google_", "yahoo_", "filings_")  # names of sources for followed assets
+ASSET_SOURCES = ("google_", "yahoo_", "filings_", "history_")  # sources outside the general stream
 BACKFILL_DAYS = 30  # how far back a new subscription starts; Google News answers with up to 100 items
 WORKERS = 8  # downloads are independent, and the level should be ready before the bar closes
 MAX_TEXT = 500
+HISTORY = "history"  # the lane of general news from before the bot was listening
+HISTORY_TICKER = "MARKET"
+HISTORY_TOPICS = {
+    "bitcoin": "bitcoin", "ethereum": "ethereum", "crypto_rules": "crypto regulation",
+    "fed": '"Federal Reserve" rates', "sec": "SEC crypto", "inflation": "US inflation CPI",
+    "stocks": '"stock market"', "tariffs": "tariffs trade",
+}
 ATOM = "{http://www.w3.org/2005/Atom}"
 
 OFFICIAL_FEEDS = {
@@ -242,6 +249,18 @@ def _filings(asset: Item) -> Source:
         named = [{**r, "title": f"{search_name(asset)}: {r['title']}"} for r in rows]  # the feed omits it
         return _for_asset(named, asset)
     return source
+
+
+def _history(words: str) -> Source:
+    query = urlencode({"q": f"{words} when:{BACKFILL_DAYS}d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    tags = {"kind": WATCH, "watch": HISTORY, "ticker": HISTORY_TICKER, "backfill": True}
+    return lambda fetch, now: [{**r, **tags} for r in parse_google(fetch(f"{GOOGLE_NEWS}?{query}"), now)]
+
+
+def history_sources() -> dict[str, Source]:
+    """A month of general news, fetched once. It is a followed lane in all but name: shown on the
+    page, kept out of the risk level and the studies, because the model may remember what followed."""
+    return {f"history_{topic}": _history(words) for topic, words in HISTORY_TOPICS.items()}
 
 
 def asset_sources(watchlist: list[Item]) -> dict[str, Source]:

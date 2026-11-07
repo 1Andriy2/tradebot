@@ -23,14 +23,17 @@ const AGENTS: Record<string, { name: string; about: string }> = {
 };
 
 const TWIN = "news_";
+const SCOUT = "s5_";
 
 export function agentName(id: string): string {
   if (id.startsWith(TWIN)) return `${agentName(id.slice(TWIN.length))} + новини`;
+  if (id.startsWith(SCOUT)) return `${agentName(id.slice(SCOUT.length))}, 5 хв`;
   return AGENTS[id]?.name ?? id;
 }
 
 export function agentAbout(id: string): string {
   if (id.startsWith(TWIN)) return `Копія стратегії «${agentName(id.slice(TWIN.length))}», яка зменшує позицію за фільтром новин. Тест фільтра.`;
+  if (id.startsWith(SCOUT)) return `Паперова торгівля на 5-хвилинних свічках і монетах із найбільшою кількістю угод. ${agentAbout(id.slice(SCOUT.length))}`;
   return AGENTS[id]?.about ?? "";
 }
 

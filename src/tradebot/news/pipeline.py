@@ -24,6 +24,7 @@ from tradebot.news.scoring import PROMPT_VERSION, Assessment, Provider, score
 from tradebot.news.sources import (
     ASSET_SOURCES,
     BACKFILL_DAYS,
+    HISTORY,
     Fetch,
     Item,
     Source,
@@ -57,6 +58,7 @@ GEO_STORIES_PER_RUN = 3
 PRIORITY = {"official": 0, "watch": 1, "social": 2, "market": 3, "news": 4, "geo": 5}
 HISTORY_RANK = 9  # a new subscription's old stories wait behind everything that happened today
 
+HISTORY_MARK = "news_history"
 TIMES = ["published", "first_seen", "scored_at"]
 NUMBERS = ["impact", "confidence"]
 TEXTS = ["source", "kind", "title", "title_uk", "url", "cluster", "status", "subject", "stance", "channel",
@@ -183,7 +185,7 @@ def to_score(frame: pd.DataFrame, now: pd.Timestamp, cfg: NewsConfig) -> pd.Data
 def apply_scores(frame: pd.DataFrame, answers: dict[int, tuple[Assessment, str]],
                  done: pd.Timestamp) -> None:
     for index, (answer, model) in answers.items():
-        if frame.at[index, "watch"] and not answer.about_asset:
+        if frame.at[index, "watch"] not in ("", HISTORY) and not answer.about_asset:
             frame.at[index, "status"], frame.at[index, "scored_at"] = OFF_TOPIC, done
             continue
         values = {**answer.model_dump(include=set(SCORE_FIELDS)), "assets": ",".join(answer.assets),
@@ -271,7 +273,8 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     names = watched or {}
     batch = batch[(batch["watch"] == "") | batch["watch"].isin(names)]  # the rest wait for their list
     payload = [{"id": int(i), "kind": r["kind"], "text": r["title"],
-                **({"asset": f"{names[r['watch']]} ({r['ticker']})"} if r["watch"] else {})}
+                **({"asset": f"{names[r['watch']]} ({r['ticker']})"}
+                   if r["watch"] not in ("", HISTORY) else {})}
                for i, r in zip(batch.index, batch.to_dict("records"), strict=True)]
     answers = score(providers, payload, now) if payload and providers else {}
     done = clock() if clock else now
@@ -288,6 +291,18 @@ def update(scored: pd.DataFrame, risk: pd.DataFrame, sources: dict[str, Source],
     report.changes = level_changes(risk, report.risk)
     rows = pd.DataFrame(report.risk).drop(columns="top")  # headlines go to events, not this file
     return frame, rows if risk.empty else pd.concat([risk, rows], ignore_index=True), report
+
+
+def history_done(store: Store) -> bool:
+    return bool(store.select("bot_status", {"component": HISTORY_MARK}))
+
+
+def mark_history(store: Store, counts: dict[str, int], now: pd.Timestamp) -> None:
+    """Close the general history once every topic answered. A failed one tries again next run."""
+    asked = [n for name, n in counts.items() if name.startswith(f"{HISTORY}_")]
+    if asked and min(asked) >= 0:
+        store.upsert("bot_status", [{"component": HISTORY_MARK, "mode": "once", "last_ok_at": now,
+                                     "last_step_at": now}], on_conflict="component")
 
 
 def mark_backfilled(store: Store, watchlist: list[Item], counts: dict[str, int], now: pd.Timestamp) -> None:

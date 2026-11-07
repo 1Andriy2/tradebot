@@ -1,4 +1,4 @@
-# Small-budget RL training on CPU (weekly). Large runs use notebooks/rl_kaggle.ipynb.
+# RL training on CPU, nightly, each night from a new seed. Large runs use notebooks/rl_kaggle.ipynb.
 name: RL train (CPU)
 
 # Triggered by Supabase Cron (supabase/migrations/20261101180000_cron_dispatch.sql)
@@ -8,10 +8,14 @@ on:
     inputs:
       timesteps:
         description: "PPO timesteps"
-        default: "300000"
+        default: "3000000"
 
 permissions:
   contents: read
+
+concurrency:
+  group: rl-train
+  cancel-in-progress: false
 
 jobs:
   rl:
@@ -28,5 +32,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           EXCHANGE_ID: ${{ vars.EXCHANGE_ID || 'okx' }}  # market data source for cache updates
-          TIMESTEPS: ${{ inputs.timesteps || '300000' }}
-        run: uv run tradebot rl-train --sync --no-download --device cpu --timesteps "$TIMESTEPS"
+          SEED: ${{ github.run_number }}
+          TIMESTEPS: ${{ inputs.timesteps || '3000000' }}
+        run: uv run tradebot rl-train --sync --no-download --device cpu --timesteps "$TIMESTEPS" --seed "$SEED"

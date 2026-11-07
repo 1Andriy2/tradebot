@@ -12,10 +12,12 @@ import { useRows } from "@/lib/useRows";
 const COMPONENTS: Record<string, { label: string; staleMinutes: number }> = {
   trader: { label: "Торговий бот", staleMinutes: 40 },
   trainer: { label: "Нічне навчання", staleMinutes: 26 * 60 },
+  scout: { label: "Лінія 5 хвилин", staleMinutes: 15 },
+  news_history: { label: "Новини за місяць", staleMinutes: Infinity },
 };
 
 const MODES: Record<string, string> = {
-  demo: "торгує на демо-рахунку", "shadow-only": "лише тестові агенти", nightly: "щонічне", weekly: "щотижневе",
+  demo: "торгує на демо-рахунку", "shadow-only": "лише тестові агенти", nightly: "щонічне", weekly: "щотижневе", once: "завантажено один раз",
 };
 
 export default function StatusPage() {

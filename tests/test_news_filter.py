@@ -1425,3 +1425,56 @@ def test_filter_study_counts_cuts_of_its_side_including_stale_ones_which_stay_in
 def test_research_survives_missing_news_files() -> None:
     scored, levels = _news_tables(MemoryStore(), NOW)
     assert scored.empty and levels.empty
+
+
+# A month of general news, fetched once
+
+HISTORY_LANE = {**FOLLOWED, sources.HISTORY: ""}
+
+
+def general_history(age: str = "20D") -> dict[str, Any]:
+    return {**history(age), "watch": sources.HISTORY, "ticker": sources.HISTORY_TICKER}
+
+
+def test_general_history_asks_every_topic_a_month_back() -> None:
+    asked: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        asked.append(url)
+        return google_feed(("Fed holds rates", "Reuters", "https://x.example/fed"))
+
+    rows = [r for source in sources.history_sources().values() for r in source(fetch, NOW)]
+    assert len(asked) == len(sources.HISTORY_TOPICS)
+    assert all("when%3A30d" in url for url in asked)
+    assert len(rows) == len(asked)
+    assert all(r["watch"] == sources.HISTORY and r["backfill"] and r["kind"] == "watch" for r in rows)
+
+
+def test_general_history_is_rated_without_being_tied_to_an_asset() -> None:
+    seen: list[str] = []
+    base = answering()
+
+    def complete(system: str, user: str) -> str:
+        seen.append(user)
+        return base.complete(system, user)
+
+    frame, _ = run_watched([general_history()], scoring.Provider("m", complete), watched=HISTORY_LANE)
+    assert frame.iloc[0]["status"] == pipeline.SCORED
+    assert '"asset"' not in seen[0]
+
+
+def test_general_history_never_reaches_the_risk_level_or_makes_it_stale() -> None:
+    items = [{**general_history("2D"), "url": f"https://x.example/{i}", "title": f"Fed story {i}"}
+             for i in range(8)]
+    _, report = run_watched(items, answering(-1.0), watched=HISTORY_LANE)
+    assert all(r["level"] == "trade" and r["events"] == 0 and not r["stale"] for r in report.risk)
+
+
+def test_general_history_is_marked_done_only_when_every_topic_answered() -> None:
+    store = MemoryStore()
+    pipeline.mark_history(store, {"history_fed": 5, "history_sec": -1, "gdelt": 3}, NOW)
+    assert not pipeline.history_done(store)
+    pipeline.mark_history(store, {"gdelt": 3}, NOW)
+    assert not pipeline.history_done(store)
+    pipeline.mark_history(store, {"history_fed": 5, "history_sec": 0}, NOW)
+    assert pipeline.history_done(store)

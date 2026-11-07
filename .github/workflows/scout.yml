@@ -1,0 +1,32 @@
+# The 5-minute paper lane. One long job at a time: it stops by itself after 345 minutes, under the
+# 6-hour limit, and the run already queued starts at once. It has no exchange keys: paper only.
+name: Scout lane
+
+# Triggered hourly by Supabase Cron (supabase/migrations/20261107120000_scout_lane.sql). GitHub keeps
+# one waiting run per group and cancels the older one, so most of those runs show as cancelled.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scout
+  cancel-in-progress: false
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --extra db --frozen
+      - name: Scout lane
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EXCHANGE_ID: ${{ vars.EXCHANGE_ID || 'okx' }}  # public market data only
+        run: uv run tradebot scout

@@ -37,7 +37,7 @@ class WalkForwardConfig:
     test_months: int = 3
     holdout_months: int = 9
     min_trades: int = 30          # across symbols, in the evaluated period
-    n_trials: int = 30
+    n_trials: int = 100
     initial_equity: float = 10_000.0
 
 

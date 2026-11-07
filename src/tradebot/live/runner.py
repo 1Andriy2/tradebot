@@ -170,13 +170,16 @@ class Trader:
         df = fetch_ohlcv_range(self.public, symbol, self.tf, since)
         if len(df) < 50:
             raise RuntimeError(f"too few candles for {symbol}: {len(df)}")
+        self._keep_candles(symbol, df)
+        return df
+
+    def _keep_candles(self, symbol: str, df: pd.DataFrame) -> None:
         tail = df.tail(8).reset_index()
         self.store.upsert("candles", [
             {"symbol": symbol, "timeframe": self.tf, "ts": r.ts, "open": r.open, "high": r.high,
              "low": r.low, "close": r.close, "volume": r.volume}
             for r in tail.itertuples()
         ], on_conflict="symbol,timeframe,ts")
-        return df
 
     def _signal(self, agent: Agent, symbol: str, df: pd.DataFrame) -> pd.Series:
         """The agent's signal on the step's bars, from a longer history if it needs one."""
@@ -263,9 +266,12 @@ class Trader:
             decisions.append(self._decision_row(ts, agent.id, "shadow", symbol, bar.signal, before,
                                                 after, decision.reason if decision else "no_change"))
         self._flush(agent.id, "shadow", symbol, state, book)
-        self.store.insert("decisions", decisions)
+        self._record(decisions)
         self._save(agent.id, "shadow", symbol, state, book, new[-1])
         return len(decisions)
+
+    def _record(self, decisions: list[dict[str, Any]]) -> None:
+        self.store.insert("decisions", decisions)
 
     # ---------- news twins ----------
 

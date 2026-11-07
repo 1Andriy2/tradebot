@@ -10,10 +10,11 @@ export interface Job {
 
 export const JOBS: Job[] = [
   { id: "trade", label: "Торговий крок", about: "Кожні 15 хвилин, після закриття свічки", cron: "2,17,32,47 * * * *" },
+  { id: "scout", label: "Лінія 5 хвилин", about: "Працює постійно, запасний запуск щогодини", cron: "5 * * * *" },
   { id: "news", label: "Збір новин", about: "Кожні 15 хвилин", cron: "11,26,41,56 * * * *" },
   { id: "retrain", label: "Навчання LightGBM", about: "Щоночі, разом із перерахунком історичних тестів", cron: "17 2 * * *" },
   { id: "research", label: "Нічне дослідження", about: "Щоночі: стратегії, патерни, перевірка гіпотез", cron: "7 4 * * *" },
-  { id: "rl", label: "Навчання RL-агента", about: "Щонеділі вночі", cron: "43 3 * * 0" },
+  { id: "rl", label: "Навчання RL-агента", about: "Щоночі", cron: "43 3 * * *" },
 ];
 
 export const job = (id: string): Job => JOBS.find((j) => j.id === id)!;

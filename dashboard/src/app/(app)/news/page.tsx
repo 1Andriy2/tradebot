@@ -175,6 +175,7 @@ export default function NewsPage() {
   const stories = useMemo(() => {
     const tickers = new Set(watchlist.rows.map((w) => w.ticker));
     const merged = new Map([...news.rows, ...followed.rows].map((i) => [i.cluster, i]));
+    tickers.add("MARKET"); // the month of general news fetched once, kept in its own lane
     return [...merged.values()].filter((i) => i.kind !== "watch" || assetList(i).some((a) => tickers.has(a)));
   }, [news.rows, followed.rows, watchlist.rows]);
 

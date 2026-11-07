@@ -148,7 +148,8 @@ def cmd_rl_train(settings: Settings, args: argparse.Namespace) -> int:
     store = _store(args)
     _prepare_data(settings, args, store)
     version, promoted, summary = train_and_register(
-        settings, store, _load_trade_frames(settings), RLConfig(timesteps=args.timesteps, device=args.device))
+        settings, store, _load_trade_frames(settings),
+        RLConfig(timesteps=args.timesteps, device=args.device, seed=args.seed))
     print(f"rl version={version} promoted={promoted} {summary}")
     return 0
 
@@ -259,9 +260,9 @@ def cmd_research(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
     """Collect and score news into a risk level. Only a shadow agent reads it."""
     from tradebot.news.filters import relevant
-    from tradebot.news.pipeline import mark_backfilled, run
+    from tradebot.news.pipeline import history_done, mark_backfilled, mark_history, run
     from tradebot.news.scoring import providers_from_env
-    from tradebot.news.sources import all_sources, collect, search_name
+    from tradebot.news.sources import HISTORY, all_sources, collect, history_sources, search_name
 
     now = pd.Timestamp.now(tz="UTC")
     channels = settings.news.telegram_channels
@@ -281,11 +282,18 @@ def cmd_news(settings: Settings, args: argparse.Namespace) -> int:
         watchlist = store.select("watchlist")
     except Exception as exc:  # followed assets are extra: the general run must go on without them
         log.warning("no watchlist this run: %s", type(exc).__name__)
-    report = run(store, all_sources(channels, watchlist), providers, settings.news, now,
+    sources = all_sources(channels, watchlist)
+    try:
+        sources |= {} if history_done(store) else history_sources()
+    except Exception as exc:  # the month of history is extra, and it can wait for the next run
+        log.warning("no news history this run: %s", type(exc).__name__)
+    report = run(store, sources, providers, settings.news, now,
                  clock=lambda: pd.Timestamp.now(tz="UTC"),
-                 watched=None if watchlist is None else {str(a["id"]): search_name(a) for a in watchlist})
+                 watched=None if watchlist is None else {HISTORY: "", **{str(a["id"]): search_name(a)
+                                                                         for a in watchlist}})
     try:
         mark_backfilled(store, watchlist or [], report.counts, now)
+        mark_history(store, report.counts, now)
     except Exception as exc:  # the next run fetches the history again, and known links are skipped
         log.warning("backfill not marked: %s", type(exc).__name__)
     failed = [name for name, count in report.counts.items() if count < 0]
@@ -322,6 +330,18 @@ def cmd_reset_kill_switch(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scout(settings: Settings, args: argparse.Namespace) -> int:
+    from tradebot.data.universe import current
+    from tradebot.live.scout import ScoutTrader, run_scout
+
+    store = _store(args)
+    public = make_public_client(settings.venue.exchange_id)
+    coins = current(store, public, pd.Timestamp.now(tz="UTC"))
+    print("coins:", ", ".join(coins))
+    run_scout(ScoutTrader(settings, store, public, coins), args.minutes)
+    return 0
+
+
 def _data_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     p.add_argument("--no-download", action="store_true", help="use cached candles as they are")
@@ -343,10 +363,14 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(name, help=help_)
         sp.add_argument("--shadow-only", action="store_true", help="paper agents only, no demo orders")
         sp.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
+    sc = sub.add_parser("scout", help="5-minute paper lane on the busiest coins, checked every minute")
+    sc.add_argument("--minutes", type=float, default=345, help="how long to run before exiting")
+    sc.add_argument("--memory-store", action="store_true", help="do not write to Supabase")
     rt = sub.add_parser("retrain", help="walk-forward retraining with champion/challenger promotion")
     _data_flags(rt)
     rl = sub.add_parser("rl-train", help="train the PPO agent and run champion/challenger")
-    rl.add_argument("--timesteps", type=int, default=300_000)
+    rl.add_argument("--timesteps", type=int, default=3_000_000)
+    rl.add_argument("--seed", type=int, default=7, help="a new seed gives the search a new start")
     rl.add_argument("--device", default="auto", help="auto | cpu | cuda")
     _data_flags(rl)
     sub.add_parser("maintenance", help="prune old rows in Supabase (free-tier housekeeping)")
@@ -367,6 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = {"download": cmd_download, "backtest": cmd_backtest, "step": cmd_step, "daemon": cmd_daemon,
+            "scout": cmd_scout,
             "retrain": cmd_retrain, "rl-train": cmd_rl_train, "maintenance": cmd_maintenance,
             "reset-kill-switch": cmd_reset_kill_switch, "research": cmd_research, "news": cmd_news}
 
